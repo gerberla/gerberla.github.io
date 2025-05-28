@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time EKG Heatmap</title>
+  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+</head>
+<body>
+  <div id="graph"></div>  
+  <div>
+    <label>Thresh:</label><input type="range" min="0" max="10" value="0" step="0.1" id="threshSlider"/>
+    <label id="thresh">0</label>
+  </div>
+
+  <div>
+    <label>Heart Rate (bpm):</label><input type="range" min="30" max="120" value="60" step="1" id="frequencySlider"/>
+    <label id="frequency">60</label>
+  </div>
+
+  <div>
+    <label>QRS Amplitude:</label><input type="range" min="0" max="1" value="0.5" step="0.01" id="amplitudeSlider"/>
+    <label id="amplitude">50%</label>
+  </div>
+
+  <div>
+    <label>Noise Intensity:</label><input type="range" min="0" max="10" value="3" step="0.1" id="noiseSlider"/>
+    <label id="noise">3</label>
+  </div>
+
+  <div>
+    <label>Peak Intensity:</label><input type="range" min="0" max="10" value="5" step="0.1" id="detectionSlider"/>
+    <label id="detection">5</label>
+  </div>
+
+  <div>
+    <label>Peak Width:</label><input type="range" min="0" max="0.5" value="0.05" step="0.01" id="widthSlider"/>
+    <label id="width">5%</label>
+  </div>
+ 
+  <script> 
+  // Plot Setup ///////////////////////////////////////////
+  var windowSize = 999; // Width of the sliding window
+  var binWidth = 256;   // Height of the heatmap (bins)
+  var threshMax = 10;
+  var thresh = 0;
+
+  // Initial data matrix
+  var dataMatrix = [];
+  for (var i = 0; i < windowSize; i++) {
+    dataMatrix.push(Array(binWidth).fill(0));
+  }
+
+  var dataPlot = [{
+    z: dataMatrix,
+    showscale: true,
+    colorscale: 'Hot',
+    type: 'heatmap',
+    zsmooth: 'fast'
+  }];
+
+  var layout = {
+    autosize: true,
+    width: 900,
+    height: 600,
+    margin: { l: 50, r: 50, b: 50, t: 25, pad: 4 },
+    paper_bgcolor: '#7f7f7f',
+    plot_bgcolor: '#c7c7c7'
+  };
+
+  Plotly.newPlot('graph', dataPlot, layout);
+
+  // EKG Parameters
+  var heartRate = 60; // beats per minute
+  var qrsAmplitude = 0.5; // 0 to 1 scale
+  var noiseIntensity = 3;
+  var detectionIntensity = 5;
+  var detectionWidthPercentage = 0.05;
+  var binCenter = binWidth / 2;
+
+  // Real-time animation variables
+  var sampleRate = 100; // Samples per second (for animation timing)
+  var samplesPerBeat = Math.floor(sampleRate * (60 / heartRate)); // Samples per heartbeat
+  var timeStep = 0; // Continuous time counter
+
+  function generateEKG(t) {
+    var beatPhase = (t % samplesPerBeat) / samplesPerBeat; // 0 to 1 within a beat
+    var signal = 0;
+
+    // Simplified EKG waveform: P, QRS, T
+    if (beatPhase < 0.1) { // P wave
+      signal = 0.1 * Math.sin(Math.PI * beatPhase / 0.1);
+    } else if (beatPhase < 0.3) { // QRS complex
+      var qrsT = (beatPhase - 0.1) / 0.2;
+      signal = qrsAmplitude * (qrsT < 0.5 ? -0.5 * qrsT : 2 * (1 - qrsT));
+    } else if (beatPhase < 0.5) { // T wave
+      signal = 0.2 * Math.sin(Math.PI * (beatPhase - 0.3) / 0.2);
+    }
+
+    return signal;
+  }
+
+  // Animation loop
+  function updateGraph() {
+    var singleFftArray = new Array(binWidth).fill(0);
+
+    // Generate EKG signal for current time
+    timeStep++;
+    var signal = generateEKG(timeStep);
+    var y = Math.floor(signal * (binWidth / 2) * qrsAmplitude) + binCenter;
+    y = Math.max(0, Math.min(binWidth - 1, y)); // Clamp to bin range
+
+    // Add noise
+    for (var i = 0; i < binWidth; i++) {
+      singleFftArray[i] = Math.random() * noiseIntensity;
+    }
+
+    // Add detection peak
+    singleFftArray[y] += detectionIntensity;
+    var detectionWidth = Math.floor(binWidth * detectionWidthPercentage);
+    for (var i = 1; i < detectionWidth; i++) {
+      var yPlus = y + i;
+      var yMinus = y - i;
+      var factor = (detectionWidth - i) / detectionWidth;
+      var intensity = detectionIntensity * factor;
+
+      if (yPlus < binWidth) singleFftArray[yPlus] += intensity;
+      if (yMinus >= 0) singleFftArray[yMinus] += intensity;
+    }
+
+    // Shift data matrix and add new column
+    dataMatrix.shift(); // Remove oldest column
+    dataMatrix.push(singleFftArray); // Add newest column
+
+    // Apply threshold and update plot
+    var filteredData = filter(dataMatrix);
+    var dataUpdate = { z: [transpose(filteredData)] };
+    Plotly.update('graph', dataUpdate);
+
+    // Request next frame
+    requestAnimationFrame(updateGraph);
+  }
+
+  // Filter and transpose functions
+  function filter(m) {
+    var matrix = m.map(row => row.slice()); // Clone matrix
+    for (var i = 0; i < matrix.length; i++) {
+      for (var j = 0; j < binWidth; j++) {
+        matrix[i][j] = matrix[i][j] < thresh ? 0 : matrix[i][j];
+      }
+    }
+    return matrix;
+  }
+
+  function transpose(a) {
+    return Object.keys(a[0]).map(function(c) {
+      return a.map(function(r) { return r[c]; });
+    });
+  }
+
+  // Slider initialization
+  function sliderInput(el, min, max, steps, value) {
+    var slider = document.getElementById(el);
+    slider.setAttribute("min", min);
+    slider.setAttribute("max", max);
+    slider.setAttribute("step", (max - min) / steps);
+    slider.setAttribute("value", value);
+    return slider;
+  }
+
+  // Sliders
+  sliderInput("threshSlider", 0, threshMax, 100, thresh)
+    .addEventListener("input", function() {
+      thresh = parseFloat(this.value);
+      document.getElementById("thresh").innerHTML = this.value;
+    }, false);
+
+  sliderInput("frequencySlider", 30, 120, 90, heartRate)
+    .addEventListener("input", function() {
+      heartRate = parseFloat(this.value);
+      samplesPerBeat = Math.floor(sampleRate * (60 / heartRate));
+      document.getElementById("frequency").innerHTML = this.value;
+    }, false);
+
+  sliderInput("amplitudeSlider", 0, 1, 100, qrsAmplitude)
+    .addEventListener("input", function() {
+      qrsAmplitude = parseFloat(this.value);
+      document.getElementById("amplitude").innerHTML = Math.floor(this.value * 100) + '%';
+    }, false);
+
+  sliderInput("noiseSlider", 0, 10, 100, noiseIntensity)
+    .addEventListener("input", function() {
+      noiseIntensity = parseFloat(this.value);
+      document.getElementById("noise").innerHTML = this.value;
+    }, false);
+
+  sliderInput("detectionSlider", 0, 10, 100, detectionIntensity)
+    .addEventListener("input", function() {
+      detectionIntensity = parseFloat(this.value);
+      document.getElementById("detection").innerHTML = this.value;
+    }, false);
+
+  sliderInput("widthSlider", 0, 0.5, 100, detectionWidthPercentage)
+    .addEventListener("input", function() {
+      detectionWidthPercentage = parseFloat(this.value);
+      document.getElementById("width").innerHTML = Math.floor(this.value * 100) + '%';
+    }, false);
+
+  // Start animation
+  requestAnimationFrame(updateGraph);
+  </script>
+</body>
+</html>

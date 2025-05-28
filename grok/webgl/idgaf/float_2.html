@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Interactive WebGL Texture</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas"></canvas>
+  <script>
+    // Get WebGL context
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported! Please use a modern browser that supports WebGL.');
+    } else {
+      // Proceed with WebGL setup only if supported
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      // Vertex Shader
+      const vsSource = `
+        attribute vec2 a_position;
+        attribute vec2 a_texCoord;
+        varying vec2 v_texCoord;
+        void main() {
+          gl_Position = vec4(a_position, 0.0, 1.0);
+          v_texCoord = a_texCoord;
+        }
+      `;
+
+      // Fragment Shader (interactive distortion and glow)
+      const fsSource = `
+        precision mediump float;
+        varying vec2 v_texCoord;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform vec2 u_mouse;
+        uniform float u_time;
+
+        void main() {
+          vec2 uv = v_texCoord;
+          vec2 mouseNorm = u_mouse / u_resolution;
+
+          // Calculate distance from mouse
+          float dist = distance(uv, mouseNorm);
+          float ripple = sin(dist * 20.0 - u_time * 5.0) * exp(-dist * 5.0);
+          vec2 offset = vec2(ripple * 0.03, ripple * 0.03);
+
+          // Distort texture near mouse
+          vec2 distortedUV = uv + offset * smoothstep(0.3, 0.0, dist);
+
+          // Base texture color (checkerboard)
+          vec4 texColor = texture2D(u_texture, distortedUV);
+          
+          // Add glow effect near mouse
+          float glow = exp(-dist * 10.0) * 0.5;
+          vec3 glowColor = vec3(0.2, 0.8, 1.0) * glow;
+
+          // Final color
+          gl_FragColor = vec4(texColor.rgb + glowColor, 1.0);
+        }
+      `;
+
+      // Compile shaders
+      const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertexShader, vsSource);
+      gl.compileShader(vertexShader);
+
+      const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragmentShader, fsSource);
+      gl.compileShader(fragmentShader);
+
+      const program = gl.createProgram();
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+      gl.linkProgram(program);
+      gl.useProgram(program);
+
+      // Create checkerboard texture
+      const texWidth = 64;
+      const texHeight = 64;
+      const textureData = new Uint8Array(texWidth * texHeight * 4);
+      for (let y = 0; y < texHeight; y++) {
+        for (let x = 0; x < texWidth; x++) {
+          const idx = (y * texWidth + x) * 4;
+          const checker = ((x >> 3) ^ (y >> 3)) & 1;
+          textureData[idx] = checker ? 200 : 50;      // R
+          textureData[idx + 1] = checker ? 150 : 100; // G
+          textureData[idx + 2] = checker ? 50 : 150;  // B
+          textureData[idx + 3] = 255;                 // A
+        }
+      }
+
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, texWidth, texHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, textureData);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+      // Quad vertices and texture coordinates
+      const positions = new Float32Array([
+        -1, -1,  1, -1,  -1, 1,
+         1, -1,  1,  1,  -1, 1
+      ]);
+      const texCoords = new Float32Array([
+        0, 0,  1, 0,  0, 1,
+        1, 0,  1, 1,  0, 1
+      ]);
+
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+      const positionLocation = gl.getAttribLocation(program, 'a_position');
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      const texCoordBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+      const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+      gl.enableVertexAttribArray(texCoordLocation);
+      gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+
+      // Uniforms
+      const resolutionLoc = gl.getUniformLocation(program, 'u_resolution');
+      const mouseLoc = gl.getUniformLocation(program, 'u_mouse');
+      const timeLoc = gl.getUniformLocation(program, 'u_time');
+      gl.uniform2f(resolutionLoc, canvas.width, canvas.height);
+
+      // Mouse tracking
+      let mouseX = -1000, mouseY = -1000; // Off-screen initially
+      canvas.addEventListener('mousemove', (e) => {
+        mouseX = e.clientX;
+        mouseY = canvas.height - e.clientY; // Flip Y for WebGL coords
+      });
+
+      // Animation loop
+      let startTime = performance.now();
+      function render() {
+        const time = (performance.now() - startTime) / 1000;
+
+        gl.clearColor(0.1, 0.1, 0.2, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.uniform2f(mouseLoc, mouseX, mouseY);
+        gl.uniform1f(timeLoc, time);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        requestAnimationFrame(render);
+      }
+      render();
+
+      // Resize handling
+      window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.uniform2f(resolutionLoc, canvas.width, canvas.height);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Interactive WebGL Line Plot</title>
+  <style>
+    canvas { border: 1px solid black; }
+    body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas" width="800" height="600"></canvas>
+  <script>
+    // Get canvas and WebGL context
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+      throw new Error('WebGL not supported');
+    }
+
+    // Vertex Shader: Applies translation
+    const vertexShaderSource = `
+      attribute vec2 a_position;
+      uniform vec2 u_translation;
+      void main() {
+        vec2 translated = a_position + u_translation;
+        gl_Position = vec4(translated, 0.0, 1.0);
+      }
+    `;
+
+    // Fragment Shader: Fixed color (blue line)
+    const fragmentShaderSource = `
+      precision mediump float;
+      void main() {
+        gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0); // Blue
+      }
+    `;
+
+    // Create and compile shaders
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    // Create shader program
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    // Generate sine wave data
+    const numPoints = 100;
+    const positions = new Float32Array(numPoints * 2);
+    for (let i = 0; i < numPoints; i++) {
+      const x = (i / (numPoints - 1)) * 2 - 1; // -1 to 1
+      const y = Math.sin(x * Math.PI * 2); // Sine wave, scaled
+      positions[i * 2] = x;
+      positions[i * 2 + 1] = y * 0.5; // Scale y to fit
+    }
+
+    // Set up position buffer
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLoc);
+    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Translation uniform
+    const translationLoc = gl.getUniformLocation(program, 'u_translation');
+    let translation = [0, 0]; // Initial offset
+
+    // Mouse interaction
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = (e.clientX - lastX) / canvas.width * 2; // Normalize to -1 to 1
+        const dy = (e.clientY - lastY) / canvas.height * -2; // Flip y-axis
+        translation[0] += dx;
+        translation[1] += dy;
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      isDragging = false;
+    });
+
+    // Render loop
+    function render() {
+      gl.clearColor(0.9, 0.9, 0.9, 1.0); // Light gray background
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      gl.uniform2fv(translationLoc, translation);
+      gl.drawArrays(gl.LINE_STRIP, 0, numPoints); // Draw connected line
+
+      requestAnimationFrame(render);
+    }
+
+    // Start rendering
+    render();
+  </script>
+</body>
+</html>

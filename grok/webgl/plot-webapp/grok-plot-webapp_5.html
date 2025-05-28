@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Full-Screen Interactive Sine Wave Plot</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      transition: background-color 0.3s;
+    }
+    #glCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+      padding: 10px;
+      width: 200px;
+      z-index: 1;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    #controls details {
+      margin-bottom: 10px;
+    }
+    #controls summary {
+      cursor: pointer;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    #controls label {
+      display: block;
+      margin: 5px 0;
+    }
+    #controls input[type="range"] {
+      width: 100%;
+    }
+    #controls input[type="checkbox"] {
+      margin-left: 5px;
+    }
+    #controls button {
+      margin-top: 5px;
+      padding: 5px;
+      width: 100%;
+      cursor: pointer;
+    }
+    #controls span {
+      margin-left: 5px;
+      font-size: 0.9em;
+    }
+    body.light-mode {
+      background: #f0f0f0;
+    }
+    #controls.light-mode {
+      background: rgba(255, 255, 255, 0.9);
+      color: #333;
+    }
+    body.dark-mode {
+      background: #1a1a1a;
+    }
+    #controls.dark-mode {
+      background: rgba(50, 50, 50, 0.9);
+      color: #ddd;
+    }
+  </style>
+</head>
+<body class="light-mode">
+  <canvas id="glCanvas"></canvas>
+  <div id="controls" class="light-mode">
+    <details open>
+      <summary>Controls</summary>
+      <label>Zoom: <input type="range" id="zoomSlider" min="0.1" max="5" value="1" step="0.1" /><span id="zoomValue">1.0</span></label>
+      <label>Period: <input type="range" id="periodSlider" min="1" max="10" value="2" step="0.1" /><span id="periodValue">2.0</span></label>
+      <label>Amplitude: <input type="range" id="amplitudeSlider" min="0.1" max="2" value="0.5" step="0.1" /><span id="amplitudeValue">0.5</span></label>
+      <label>Flow Speed: <input type="range" id="speedSlider" min="0.01" max="0.1" value="0.02" step="0.01" /><span id="speedValue">0.02</span></label>
+      <label>Thickness: <input type="range" id="widthSlider" min="0.01" max="0.2" value="0.02" step="0.01" /><span id="widthValue">0.02</span></label>
+      <label>Dark Mode: <input type="checkbox" id="darkModeToggle" /></label>
+      <button id="resetButton">Reset View</button>
+    </details>
+  </div>
+  <script>
+    // Get canvas and WebGL context
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+      throw new Error('WebGL not supported');
+    }
+
+    // Resize canvas to full screen
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Vertex Shader
+    const vertexShaderSource = `
+      attribute vec2 a_position;
+      uniform vec2 u_translation;
+      uniform float u_scale;
+      uniform bool u_useScale;
+      void main() {
+        vec2 pos = a_position;
+        if (u_useScale) {
+          pos = pos * u_scale;
+        }
+        pos = pos + u_translation;
+        gl_Position = vec4(pos, 0.0, 1.0);
+      }
+    `;
+
+    // Fragment Shader
+    const fragmentShaderSource = `
+      precision mediump float;
+      uniform vec3 u_color;
+      void main() {
+        gl_FragColor = vec4(u_color, 1.0);
+      }
+    `;
+
+    // Create and compile shaders
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    // Create shader program
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    // Generate initial sine wave data as a triangle strip
+    const numPoints = canvas.width;
+    const sinePositions = new Float32Array(numPoints * 4); // 2 vertices per point (top and bottom)
+    for (let i = 0; i < numPoints; i++) {
+      const x = (i / (numPoints - 1)) * 10 - 5; // -5 to 5
+      const y = 0; // Initialize
+      sinePositions[i * 4] = x;     // Top vertex x
+      sinePositions[i * 4 + 1] = y; // Top vertex y
+      sinePositions[i * 4 + 2] = x; // Bottom vertex x
+      sinePositions[i * 4 + 3] = y; // Bottom vertex y
+    }
+
+    // Axis data
+    const axisPositions = new Float32Array([
+      -100.0, 0.0,  100.0, 0.0, // x-axis
+       0.0, -100.0, 0.0, 100.0  // y-axis
+    ]);
+
+    // Buffers
+    const sineBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, sineBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, sinePositions, gl.DYNAMIC_DRAW);
+
+    const axisBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, axisBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, axisPositions, gl.STATIC_DRAW);
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLoc);
+
+    // Uniforms
+    const translationLoc = gl.getUniformLocation(program, 'u_translation');
+    const scaleLoc = gl.getUniformLocation(program, 'u_scale');
+    const colorLoc = gl.getUniformLocation(program, 'u_color');
+    const useScaleLoc = gl.getUniformLocation(program, 'u_useScale');
+    let translation = [0, 0]; // Center (0,0)
+    let scale = 1.0; // Default zoom
+    let period = 2.0;
+    let amplitude = 0.5;
+    let flowSpeed = 0.02;
+    let thickness = 0.02; // Thickness in clip space units
+    let darkMode = false;
+
+    // Mouse interaction
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = (e.clientX - lastX) / canvas.width * 2 / scale;
+        const dy = (e.clientY - lastY) / canvas.height * -2 / scale;
+        translation[0] += dx;
+        translation[1] += dy;
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      isDragging = false;
+    });
+
+    // Control sliders and dark mode toggle
+    function setupSlider(id, min, max, value, step, onChange) {
+      const slider = document.getElementById(id + 'Slider');
+      const valueSpan = document.getElementById(id + 'Value');
+      slider.min = min;
+      slider.max = max;
+      slider.value = value;
+      slider.step = step;
+      valueSpan.textContent = id === 'width' ? parseFloat(value).toFixed(2) : parseFloat(value).toFixed(2);
+      slider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        valueSpan.textContent = id === 'width' ? val.toFixed(2) : val.toFixed(2);
+        onChange(val);
+      });
+    }
+
+    setupSlider('zoom', 0.1, 5, 1, 0.1, (val) => { scale = val; });
+    setupSlider('period', 1, 10, 2, 0.1, (val) => { period = val; });
+    setupSlider('amplitude', 0.1, 2, 0.5, 0.1, (val) => { amplitude = val; });
+    setupSlider('speed', 0.01, 0.1, 0.02, 0.01, (val) => { flowSpeed = val; });
+    setupSlider('width', 0.01, 0.2, 0.02, 0.01, (val) => { thickness = val; });
+
+    const darkModeToggle = document.getElementById('darkModeToggle');
+    darkModeToggle.addEventListener('change', (e) => {
+      darkMode = e.target.checked;
+      document.body.className = darkMode ? 'dark-mode' : 'light-mode';
+      document.getElementById('controls').className = darkMode ? 'dark-mode' : 'light-mode';
+    });
+
+    // Reset button
+    const resetButton = document.getElementById('resetButton');
+    resetButton.addEventListener('click', () => {
+      translation = [0, 0];
+      scale = 1.0;
+      document.getElementById('zoomSlider').value = 1;
+      document.getElementById('zoomValue').textContent = '1.0';
+    });
+
+    // Live sine wave update
+    let phase = 0;
+    function updateSineWave() {
+      phase += flowSpeed;
+      for (let i = 0; i < numPoints; i++) {
+        const x = (i / (numPoints - 1)) * 10 - 5; // -5 to 5
+        const y = amplitude * Math.sin((x * 2 * Math.PI / period) + phase);
+        sinePositions[i * 4] = x;       // Top vertex x
+        sinePositions[i * 4 + 1] = y + thickness / 2; // Top vertex y
+        sinePositions[i * 4 + 2] = x;   // Bottom vertex x
+        sinePositions[i * 4 + 3] = y - thickness / 2; // Bottom vertex y
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, sineBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, sinePositions);
+    }
+
+    // Render loop
+    function render() {
+      gl.clearColor(darkMode ? 0.1 : 0.9, darkMode ? 0.1 : 0.9, darkMode ? 0.1 : 0.9, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      updateSineWave();
+
+      // Draw sine wave as triangle strip (cyan in dark mode, blue in light mode)
+      gl.uniform2fv(translationLoc, translation);
+      gl.uniform1f(scaleLoc, scale);
+      gl.uniform1i(useScaleLoc, 1);
+      gl.uniform3f(colorLoc, darkMode ? 0.0 : 0.0, darkMode ? 1.0 : 0.0, darkMode ? 1.0 : 1.0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sineBuffer);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, numPoints * 2);
+
+      // Draw axes (white in dark mode, black in light mode)
+      gl.uniform1i(useScaleLoc, 0);
+      gl.uniform3f(colorLoc, darkMode ? 1.0 : 0.0, darkMode ? 1.0 : 0.0, darkMode ? 1.0 : 0.0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, axisBuffer);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINES, 0, 4);
+
+      requestAnimationFrame(render);
+    }
+
+    // Start rendering
+    render();
+  </script>
+</body>
+</html>

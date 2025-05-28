@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ballistic Missile Trajectory with Cesium</title>
+  <!-- CesiumJS CSS -->
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+      font-family: Arial, sans-serif;
+      color: #fff;
+    }
+    #cesiumContainer {
+      flex: 1;
+      width: 100%;
+    }
+    #controls {
+      padding: 10px;
+      background: #2d2d2d;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    #controls label {
+      margin-right: 5px;
+    }
+    #controls input, #controls select {
+      padding: 5px;
+      background: #3a3a3a;
+      border: none;
+      color: #fff;
+      border-radius: 4px;
+    }
+    #controls button {
+      padding: 5px 10px;
+      background: #4a4a4a;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    #controls button:hover {
+      background: #5a5a5a;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>Launch Lat: <input type="number" id="launchLat" value="35.6762" step="0.0001" min="-90" max="90" onchange="updateTrajectory()"></label>
+    <label>Launch Lon: <input type="number" id="launchLon" value="139.6503" step="0.0001" min="-180" max="180" onchange="updateTrajectory()"></label>
+    <label>Target Lat: <input type="number" id="targetLat" value="34.0522" step="0.0001" min="-90" max="90" onchange="updateTrajectory()"></label>
+    <label>Target Lon: <input type="number" id="targetLon" value="-118.2437" step="0.0001" min="-180" max="180" onchange="updateTrajectory()"></label>
+    <label>Range:
+      <select id="range" onchange="updateTrajectory()">
+        <option value="2500">Short (2500 km)</option>
+        <option value="5500" selected>Medium (5500 km)</option>
+        <option value="12000">ICBM (12000 km)</option>
+      </select>
+    </label>
+    <button onclick="downloadKML()">Download KML</button>
+  </div>
+  <div id="cesiumContainer"></div>
+  <!-- CesiumJS Script -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
+  <script>
+    // Cesium setup
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2ZmY0YzM0Ny1kMDVjLTQ4ZjAtYjUzMi1mN2ZhNGY5YzZhYjMiLCJpZCI6MjQzNTg4LCJpYXQiOjE3MjcyNTQwNTd9.SxFEw3lZhzjJ-fxNMDG5h-OeMnYcV0QVtN2rKXvODuE'; // Replace with your token if needed
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrainProvider: Cesium.createWorldTerrain()
+    });
+
+    // ECEF and trajectory calculation
+    const R = 6371; // Earth's radius in km
+    let kmlTrajectory = [];
+
+    function latLonToECEF(lat, lon) {
+      const radLat = lat * Math.PI / 180;
+      const radLon = lon * Math.PI / 180;
+      const x = R * Math.cos(radLat) * Math.cos(radLon);
+      const y = R * Math.cos(radLat) * Math.sin(radLon);
+      const z = R * Math.sin(radLat);
+      return [x, y, z];
+    }
+
+    function ecefToLatLonAlt(x, y, z) {
+      const r = Math.sqrt(x * x + y * y + z * z);
+      const lon = Math.atan2(y, x) * 180 / Math.PI;
+      const lat = Math.asin(z / r) * 180 / Math.PI;
+      const alt = r - R; // Altitude in km
+      return [lat, lon, alt];
+    }
+
+    function generateTrajectory(launchLat, launchLon, targetLat, targetLon, range) {
+      const start = latLonToECEF(launchLat, launchLon);
+      const end = latLonToECEF(targetLat, targetLon);
+      const numPoints = 100;
+      kmlTrajectory = [];
+
+      const maxHeight = range * 0.1;
+      for (let t = 0; t <= 1; t += 1 / numPoints) {
+        const x = start[0] + (end[0] - start[0]) * t;
+        const y = start[1] + (end[1] - start[1]) * t;
+        const z = start[2] + (end[2] - start[2]) * t;
+        const height = maxHeight * 4 * t * (1 - t);
+        const r = R + height;
+        const scale = r / Math.sqrt(x * x + y * y + z * z);
+        const xEcef = x * scale;
+        const yEcef = y * scale;
+        const zEcef = z * scale;
+        const [lat, lon, alt] = ecefToLatLonAlt(xEcef, yEcef, zEcef);
+        kmlTrajectory.push([lon, lat, alt * 1000]); // KML uses meters
+      }
+
+      // Generate and load KML
+      const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Missile Trajectory</name>
+    <Style id="trajectoryStyle">
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>4</width>
+      </LineStyle>
+    </Style>
+    <Placemark>
+      <name>Trajectory</name>
+      <styleUrl>#trajectoryStyle</styleUrl>
+      <LineString>
+        <extrude>1</extrude>
+        <tessellate>1</tessellate>
+        <altitudeMode>absolute</altitudeMode>
+        <coordinates>
+          ${kmlTrajectory.map(point => point.join(',')).join('\n          ')}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+      
+      // Clear existing data sources
+      viewer.dataSources.removeAll();
+      
+      // Add KML as a data source
+      const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+      const url = URL.createObjectURL(blob);
+      Cesium.KmlDataSource.load(url).then(dataSource => {
+        viewer.dataSources.add(dataSource);
+        viewer.zoomTo(dataSource); // Auto-focus on the trajectory
+      });
+    }
+
+    // KML download
+    function downloadKML() {
+      const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Missile Trajectory</name>
+    <Style id="trajectoryStyle">
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>4</width>
+      </LineStyle>
+    </Style>
+    <Placemark>
+      <name>Trajectory</name>
+      <styleUrl>#trajectoryStyle</styleUrl>
+      <LineString>
+        <extrude>1</extrude>
+        <tessellate>1</tessellate>
+        <altitudeMode>absolute</altitudeMode>
+        <coordinates>
+          ${kmlTrajectory.map(point => point.join(',')).join('\n          ')}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+      const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'missile_trajectory.kml';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }
+
+    // Initial trajectory
+    updateTrajectory();
+
+    // Update function
+    function updateTrajectory() {
+      const launchLat = parseFloat(document.getElementById('launchLat').value);
+      const launchLon = parseFloat(document.getElementById('launchLon').value);
+      const targetLat = parseFloat(document.getElementById('targetLat').value);
+      const targetLon = parseFloat(document.getElementById('targetLon').value);
+      const range = parseFloat(document.getElementById('range').value);
+      generateTrajectory(launchLat, launchLon, targetLat, targetLon, range);
+    }
+  </script>
+</body>
+</html>

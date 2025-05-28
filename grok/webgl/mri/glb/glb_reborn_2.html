@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLB Viewer with Rotation Controls</title>
+    <style>
+        body { 
+            margin: 0; 
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            width: 400px;
+            height: 400px;
+            margin: 20px;
+            border: 1px solid #ccc;
+            position: relative;
+        }
+        canvas { 
+            display: block;
+        }
+        #upload-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 5px;
+            border-radius: 3px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 3px;
+        }
+        .slider-container {
+            margin: 10px 0;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="upload-container">
+            <input type="file" id="fileInput" accept=".glb">
+        </div>
+        <div id="controls">
+            <div class="slider-container">
+                <label>X Rotation: <span id="xValue">0</span>°</label>
+                <input type="range" id="xSlider" min="-180" max="180" value="0">
+            </div>
+            <div class="slider-container">
+                <label>Y Rotation: <span id="yValue">0</span>°</label>
+                <input type="range" id="ySlider" min="-180" max="180" value="0">
+            </div>
+            <div class="slider-container">
+                <label>Z Rotation: <span id="zValue">0</span>°</label>
+                <input type="range" id="zSlider" min="-180" max="180" value="0">
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xdddddd);
+
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+        camera.position.z = 5;
+
+        // Renderer setup
+        const container = document.getElementById('container');
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(400, 400);
+        container.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(0, 1, 1);
+        scene.add(directionalLight);
+
+        // Orbit controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // GLTF Loader
+        const loader = new GLTFLoader();
+        let currentModel = null;
+
+        // Slider elements
+        const xSlider = document.getElementById('xSlider');
+        const ySlider = document.getElementById('ySlider');
+        const zSlider = document.getElementById('zSlider');
+        const xValue = document.getElementById('xValue');
+        const yValue = document.getElementById('yValue');
+        const zValue = document.getElementById('zValue');
+
+        // File input handling
+        const fileInput = document.getElementById('fileInput');
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const arrayBuffer = e.target.result;
+                    loader.parse(arrayBuffer, '', (gltf) => {
+                        if (currentModel) {
+                            scene.remove(currentModel);
+                        }
+
+                        currentModel = gltf.scene;
+                        scene.add(currentModel);
+
+                        const box = new THREE.Box3().setFromObject(currentModel);
+                        const center = box.getCenter(new THREE.Vector3());
+                        const size = box.getSize(new THREE.Vector3());
+                        
+                        currentModel.position.sub(center);
+                        const maxSize = Math.max(size.x, size.y, size.z);
+                        const scale = 4 / maxSize;
+                        currentModel.scale.set(scale, scale, scale);
+                        
+                        camera.position.set(0, 0, Math.max(size.x, size.y, size.z) * 2);
+                        controls.update();
+                        
+                        // Reset sliders
+                        xSlider.value = 0;
+                        ySlider.value = 0;
+                        zSlider.value = 0;
+                        updateRotationValues();
+                    }, (error) => {
+                        console.error('Error loading GLB:', error);
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // Slider event listeners
+        function updateRotationValues() {
+            xValue.textContent = xSlider.value;
+            yValue.textContent = ySlider.value;
+            zValue.textContent = zSlider.value;
+            
+            if (currentModel) {
+                currentModel.rotation.x = THREE.MathUtils.degToRad(xSlider.value);
+                currentModel.rotation.y = THREE.MathUtils.degToRad(ySlider.value);
+                currentModel.rotation.z = THREE.MathUtils.degToRad(zSlider.value);
+            }
+        }
+
+        xSlider.addEventListener('input', updateRotationValues);
+        ySlider.addEventListener('input', updateRotationValues);
+        zSlider.addEventListener('input', updateRotationValues);
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

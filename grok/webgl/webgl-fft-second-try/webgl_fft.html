@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time FFT Heatmap from MP3 (WebGL)</title>
+  <style>
+    .controls { margin: 10px 0; }
+    .slider-container { margin: 5px 0; }
+    canvas { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas" width="900" height="600"></canvas>
+  <input type="file" id="audioInput" accept="audio/*" />
+  <div class="controls">
+    <button id="playButton" disabled>Play</button>
+    <button id="pauseButton" disabled>Pause</button>
+    <div class="slider-container">
+      <label>Playback Speed:</label><input type="range" min="0.5" max="2" value="1" step="0.1" id="speedSlider"/>
+      <label id="speed">1x</label>
+    </div>
+    <div class="slider-container">
+      <label>Intensity:</label><input type="range" min="1" max="50" value="10" step="1" id="intensitySlider"/>
+      <label id="intensity">10</label>
+    </div>
+    <div class="slider-container">
+      <label>Bin Width:</label><input type="range" min="1" max="20" value="5" step="1" id="widthSlider"/>
+      <label id="width">5</label>
+    </div>
+  </div>
+
+  <script>
+  // WebGL Setup
+  var canvas = document.getElementById('glCanvas');
+  var gl = canvas.getContext('webgl');
+  if (!gl) {
+    alert('WebGL not supported!');
+    throw new Error('WebGL not supported');
+  }
+
+  const vertexShaderSource = `
+    attribute vec2 a_position;
+    attribute vec2 a_texCoord;
+    varying vec2 v_texCoord;
+    void main() {
+      gl_Position = vec4(a_position, 0.0, 1.0);
+      v_texCoord = a_texCoord;
+    }
+  `;
+
+  const fragmentShaderSource = `
+    precision mediump float;
+    uniform sampler2D u_texture;
+    varying vec2 v_texCoord;
+    void main() {
+      float value = texture2D(u_texture, v_texCoord).r; // 0-1
+      vec3 color = vec3(0.0);
+      if (value > 0.0) {
+        if (value < 0.33) color = vec3(value / 0.33, 0.0, 0.0);
+        else if (value < 0.66) color = vec3(1.0, (value - 0.33) / 0.33, 0.0);
+        else color = vec3(1.0, 1.0, (value - 0.66) / 0.34);
+      }
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  function createShader(gl, type, source) {
+    var shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+  var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+  var program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(program));
+  }
+  gl.useProgram(program);
+
+  var positionBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  var positions = new Float32Array([
+    -1, -1,  0, 0,
+     1, -1,  1, 0,
+    -1,  1,  0, 1,
+     1,  1,  1, 1
+  ]);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+  var positionLoc = gl.getAttribLocation(program, 'a_position');
+  var texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+  gl.enableVertexAttribArray(positionLoc);
+  gl.enableVertexAttribArray(texCoordLoc);
+  gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 16, 0);
+  gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 16, 8);
+
+  // Texture setup
+  var timeSize = 300;   // Time (x-axis, rows)
+  var freqSize = 600;   // Frequency (y-axis, columns)
+  var texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  var textureData = new Uint8Array(timeSize * freqSize);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, timeSize, freqSize, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+
+  // Web Audio Setup
+  var audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  var audioElement = new Audio();
+  var sourceNode = null;
+  var analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048; // 1024 bins, we’ll subsample
+  var frequencyData = new Uint8Array(analyser.frequencyBinCount);
+  var isPlaying = false;
+
+  // Parameters
+  var playbackSpeed = 1;
+  var intensity = 10;
+  var binWidth = 5;
+  var sampleRate = 100; // Updates per second
+  var lastFreqValues = new Array(freqSize).fill(0); // Track previous FFT values
+
+  // UI Elements
+  var playButton = document.getElementById('playButton');
+  var pauseButton = document.getElementById('pauseButton');
+
+  document.getElementById('audioInput').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (file) {
+      audioElement.src = URL.createObjectURL(file);
+      playButton.disabled = false;
+      pauseButton.disabled = true;
+    }
+  });
+
+  playButton.addEventListener('click', function() {
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        console.log('AudioContext resumed');
+        startPlayback();
+      });
+    } else {
+      startPlayback();
+    }
+  });
+
+  pauseButton.addEventListener('click', function() {
+    audioElement.pause();
+    isPlaying = false;
+    playButton.disabled = false;
+    pauseButton.disabled = true;
+  });
+
+  function startPlayback() {
+    if (!sourceNode) {
+      sourceNode = audioContext.createMediaElementSource(audioElement);
+      sourceNode.connect(analyser);
+      analyser.connect(audioContext.destination);
+    }
+    audioElement.playbackRate = playbackSpeed;
+    audioElement.play();
+    isPlaying = true;
+    playButton.disabled = true;
+    pauseButton.disabled = false;
+    requestAnimationFrame(updateGraph);
+  }
+
+  // Draw FFT line with width
+  function drawFFTLine(freqValues, x) {
+    var peakValue = 255;
+    for (var y = 0; y < freqSize; y++) {
+      var value = freqValues[y] * intensity / 10;
+      textureData[y * timeSize + x] = Math.min(255, value);
+      // Apply bin width
+      for (var t = 1; t <= Math.floor(binWidth / 2); t++) {
+        var yPlus = y + t;
+        var yMinus = y - t;
+        var fade = value * (1 - t / (binWidth / 2 + 1));
+        if (yPlus < freqSize) textureData[yPlus * timeSize + x] = Math.max(textureData[yPlus * timeSize + x], Math.min(255, fade));
+        if (yMinus >= 0) textureData[yMinus * timeSize + x] = Math.max(textureData[yMinus * timeSize + x], Math.min(255, fade));
+      }
+    }
+  }
+
+  // Animation
+  var lastUpdate = performance.now();
+
+  function updateGraph(currentTime) {
+    var deltaTime = (currentTime - lastUpdate) / 1000;
+    lastUpdate = currentTime;
+
+    if (isPlaying) {
+      var steps = Math.floor(deltaTime * sampleRate);
+      for (var s = 0; s < steps; s++) {
+        // Shift texture data left
+        for (var x = 0; x < timeSize - 1; x++) {
+          for (var y = 0; y < freqSize; y++) {
+            textureData[y * timeSize + x] = textureData[y * timeSize + (x + 1)];
+          }
+        }
+
+        // Clear last column
+        for (var y = 0; y < freqSize; y++) {
+          textureData[y * timeSize + (timeSize - 1)] = 0;
+        }
+
+        // Get FFT data
+        analyser.getByteFrequencyData(frequencyData);
+
+        // Subsample FFT to freqSize (600 bins from 1024)
+        var freqValues = new Array(freqSize).fill(0);
+        var binStep = analyser.frequencyBinCount / freqSize;
+        for (var i = 0; i < freqSize; i++) {
+          var fftIndex = Math.floor(i * binStep);
+          freqValues[i] = frequencyData[fftIndex] / 255; // Normalize 0-1
+        }
+
+        // Draw FFT line
+        drawFFTLine(freqValues, timeSize - 1);
+      }
+
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, timeSize, freqSize, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    if (isPlaying) requestAnimationFrame(updateGraph);
+  }
+
+  // Slider initialization
+  function sliderInput(el, min, max, steps, value, labelFormat) {
+    var slider = document.getElementById(el);
+    slider.setAttribute("min", min);
+    slider.setAttribute("max", max);
+    slider.setAttribute("step", (max - min) / steps);
+    slider.setAttribute("value", value);
+    slider.addEventListener("input", function() {
+      var val = parseFloat(this.value);
+      if (el === "speedSlider") {
+        playbackSpeed = val;
+        if (isPlaying) audioElement.playbackRate = val;
+        document.getElementById("speed").innerHTML = val.toFixed(1) + 'x';
+      } else if (el === "intensitySlider") {
+        intensity = val;
+        document.getElementById("intensity").innerHTML = val;
+      } else if (el === "widthSlider") {
+        binWidth = val;
+        document.getElementById("width").innerHTML = val;
+      }
+    });
+    document.getElementById(el.replace("Slider", "")).innerHTML = labelFormat ? labelFormat(value) : value;
+    return slider;
+  }
+
+  sliderInput("speedSlider", 0.5, 2, 15, 1, v => v.toFixed(1) + 'x');
+  sliderInput("intensitySlider", 1, 50, 49, 10);
+  sliderInput("widthSlider", 1, 20, 19, 5);
+
+  // Initial render
+  gl.clearColor(0.5, 0.5, 0.5, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  </script>
+</body>
+</html>

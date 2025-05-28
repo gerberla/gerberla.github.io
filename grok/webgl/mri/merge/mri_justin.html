@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brain MRI Heatmap with .glb and 3D View</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #1a1a1a;
+      overflow: hidden;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+    #container {
+      display: flex;
+      flex-direction: row;
+      gap: 20px;
+    }
+    #glCanvas, #threeCanvas {
+      width: 512px;
+      height: 512px;
+      border: 1px solid #333;
+    }
+    #sliceSlider {
+      width: 512px;
+      margin-top: 20px;
+    }
+    #sliceLabel {
+      margin-top: 10px;
+    }
+    #controls {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .radio-group, .dropdown-group, .upload-group, .rotation-group {
+      display: flex;
+      gap: 10px;
+    }
+    .rotation-group label {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="glCanvas"></canvas>
+    <canvas id="threeCanvas"></canvas>
+  </div>
+  <input type="range" id="sliceSlider" min="0" max="63" value="32">
+  <div id="sliceLabel">Slice: 32</div>
+  <div id="controls">
+    <div class="radio-group">
+      <label><input type="radio" name="resolution" value="64" checked> 64x64</label>
+      <label><input type="radio" name="resolution" value="128"> 128x128</label>
+      <label><input type="radio" name="resolution" value="256"> 256x256</label>
+    </div>
+    <div class="dropdown-group">
+      <label for="shape">Shape:</label>
+      <select id="shape">
+        <option value="sphere" selected>Sphere</option>
+        <option value="oval">Oval</option>
+        <option value="cone">Cone</option>
+        <option value="glb">.glb Upload</option>
+      </select>
+    </div>
+    <div class="upload-group" id="uploadSection" style="display: none;">
+      <label for="gltfUpload">Upload .glb File:</label>
+      <input type="file" id="gltfUpload" accept=".glb">
+    </div>
+    <div class="rotation-group">
+      <label>X: <input type="range" id="rotX" min="0" max="360" value="0"></label>
+      <label>Y: <input type="range" id="rotY" min="0" max="360" value="0"></label>
+      <label>Z: <input type="range" id="rotZ" min="0" max="360" value="0"></label>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+        }
+    }
+    </script>  
+    <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    // WebGL Cross-Section Canvas
+    const glCanvas = document.getElementById('glCanvas');
+    const gl = glCanvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+      throw new Error('WebGL not supported');
+    }
+
+    glCanvas.width = 512;
+    glCanvas.height = 512;
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+
+    const vertexShaderSource = `
+      attribute vec2 a_position;
+      attribute vec2 a_texCoord;
+      uniform mat4 u_mvp;
+      varying vec2 v_texCoord;
+      void main() {
+        gl_Position = u_mvp * vec4(a_position, 0.0, 1.0);
+        v_texCoord = a_texCoord;
+      }
+    `;
+
+    const fragmentShaderSource = `
+      precision mediump float;
+      varying vec2 v_texCoord;
+      uniform sampler2D u_texture;
+      void main() {
+        vec4 color = texture2D(u_texture, v_texCoord);
+        float intensity = color.r;
+        gl_FragColor = vec4(intensity, intensity * 0.5, 0.0, 1.0);
+      }
+    `;
+
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program error:', gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    let currentResolution = 64;
+    let currentShape = 'sphere';
+    let brainData, textures, depth;
+    let glbGeometry = null;
+    let glbModel = null; // Store the full .glb model
+
+    function generateBrainData(width, height, depth, shape, glbGeometry) {
+      const data = new Uint8Array(width * height * depth);
+      if (shape === 'glb' && glbGeometry) {
+        console.log('Processing .glb geometry at resolution:', width, 'x', height, 'x', depth);
+        const positions = glbGeometry.attributes.position.array;
+        const indices = glbGeometry.index ? glbGeometry.index.array : null;
+        const bounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+        
+        for (let i = 0; i < positions.length; i += 3) {
+          bounds.min[0] = Math.min(bounds.min[0], positions[i]);
+          bounds.min[1] = Math.min(bounds.min[1], positions[i + 1]);
+          bounds.min[2] = Math.min(bounds.min[2], positions[i + 2]);
+          bounds.max[0] = Math.max(bounds.max[0], positions[i]);
+          bounds.max[1] = Math.max(bounds.max[1], positions[i + 1]);
+          bounds.max[2] = Math.max(bounds.max[2], positions[i + 2]);
+        }
+
+        const scaleX = width / (bounds.max[0] - bounds.min[0] || 1);
+        const scaleY = height / (bounds.max[1] - bounds.min[1] || 1);
+        const scaleZ = depth / (bounds.max[2] - bounds.min[2] || 1);
+
+        if (indices) {
+          for (let i = 0; i < indices.length; i += 3) {
+            const v0 = [positions[indices[i] * 3], positions[indices[i] * 3 + 1], positions[indices[i] * 3 + 2]];
+            const v1 = [positions[indices[i + 1] * 3], positions[indices[i + 1] * 3 + 1], positions[indices[i + 1] * 3 + 2]];
+            const v2 = [positions[indices[i + 2] * 3], positions[indices[i + 2] * 3 + 1], positions[indices[i + 2] * 3 + 2]];
+
+            const minX = Math.min(v0[0], v1[0], v2[0]);
+            const maxX = Math.max(v0[0], v1[0], v2[0]);
+            const minY = Math.min(v0[1], v1[1], v2[1]);
+            const maxY = Math.max(v0[1], v1[1], v2[1]);
+            const minZ = Math.min(v0[2], v1[2], v2[2]);
+            const maxZ = Math.max(v0[2], v1[2], v2[2]);
+
+            const x0 = Math.floor((minX - bounds.min[0]) * scaleX);
+            const x1 = Math.ceil((maxX - bounds.min[0]) * scaleX);
+            const y0 = Math.floor((minY - bounds.min[1]) * scaleY);
+            const y1 = Math.ceil((maxY - bounds.min[1]) * scaleY);
+            const z0 = Math.floor((minZ - bounds.min[2]) * scaleZ);
+            const z1 = Math.ceil((maxZ - bounds.min[2]) * scaleZ);
+
+            for (let z = Math.max(0, z0); z <= Math.min(depth - 1, z1); z++) {
+              for (let y = Math.max(0, y0); y <= Math.min(height - 1, y1); y++) {
+                for (let x = Math.max(0, x0); x <= Math.min(width - 1, x1); x++) {
+                  const idx = z * width * height + y * width + x;
+                  data[idx] = 255;
+                }
+              }
+            }
+          }
+        } else {
+          console.warn('No indices found, using vertex-based voxelization');
+          for (let i = 0; i < positions.length; i += 3) {
+            const x = Math.floor((positions[i] - bounds.min[0]) * scaleX);
+            const y = Math.floor((positions[i + 1] - bounds.min[1]) * scaleY);
+            const z = Math.floor((positions[i + 2] - bounds.min[2]) * scaleZ);
+            if (x >= 0 && x < width && y >= 0 && y < height && z >= 0 && z < depth) {
+              const idx = z * width * height + y * width + x;
+              data[idx] = 255;
+            }
+          }
+        }
+      } else {
+        for (let z = 0; z < depth; z++) {
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              const i = z * width * height + y * width + x;
+              const dx = (x - width / 2) / (width / 2);
+              const dy = (y - height / 2) / (height / 2);
+              const dz = (z - depth / 2) / (depth / 2);
+              let intensity = 0;
+
+              if (shape === 'sphere') {
+                const dist = dx * dx + dy * dy + dz * dz;
+                intensity = dist < 0.8 ? 1.0 : 0.0;
+              } else if (shape === 'oval') {
+                const dist = (dx * dx) / 0.9 + (dy * dy) / 0.6 + (dz * dz) / 0.7;
+                intensity = dist < 0.8 ? 1.0 : 0.0;
+              } else if (shape === 'cone') {
+                const zNorm = (z / depth) * 2 - 1;
+                const radius = (1 - (zNorm + 1) / 2);
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                intensity = dist < radius && zNorm > -1 ? 1.0 : 0.0;
+              }
+
+              data[i] = Math.min(255, (intensity + Math.random() * 0.3) * 255);
+            }
+          }
+        }
+      }
+      return data;
+    }
+
+    function updateTextures() {
+      if (textures) {
+        textures.forEach(tex => gl.deleteTexture(tex));
+      }
+      const width = currentResolution;
+      const height = currentResolution;
+      depth = currentResolution;
+      brainData = generateBrainData(width, height, depth, currentShape, glbGeometry);
+
+      textures = [];
+      for (let z = 0; z < depth; z++) {
+        const sliceData = new Uint8Array(width * height * 4);
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4;
+            const value = brainData[z * width * height + y * width + x];
+            sliceData[i] = value;
+            sliceData[i + 1] = value;
+            sliceData[i + 2] = value;
+            sliceData[i + 3] = 255;
+          }
+        }
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, sliceData);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        textures.push(texture);
+      }
+
+      const slider = document.getElementById('sliceSlider');
+      slider.max = depth - 1;
+      slider.value = Math.floor(depth / 2);
+      currentSlice = slider.value;
+      label.textContent = `Slice: ${currentSlice}`;
+    }
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,  1, -1,  -1, 1,  1, 1
+    ]), gl.STATIC_DRAW);
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, 1,  1, 1,  0, 0,  1, 0
+    ]), gl.STATIC_DRAW);
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+    const mvpLoc = gl.getUniformLocation(program, 'u_mvp');
+
+    const mvp = new Float32Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    ]);
+
+    const slider = document.getElementById('sliceSlider');
+    const label = document.getElementById('sliceLabel');
+    let currentSlice = 32;
+
+    slider.addEventListener('input', (e) => {
+      currentSlice = parseInt(e.target.value);
+      label.textContent = `Slice: ${currentSlice}`;
+    });
+
+    // Three.js 3D View Setup
+    const threeCanvas = document.getElementById('threeCanvas');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas });
+    renderer.setSize(512, 512);
+    renderer.setClearColor(0x333333);
+
+    const controls = new OrbitControls(camera, threeCanvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    camera.position.z = 5;
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    directionalLight.position.set(0, 1, 1);
+    scene.add(directionalLight);
+
+    // GLTF Loader
+    const loader = new GLTFLoader();
+    let currentModel = null;
+
+    function createSimulatedModel(shape) {
+      let geometry;
+      if (shape === 'sphere') {
+        geometry = new THREE.SphereGeometry(1, 32, 32);
+      } else if (shape === 'oval') {
+        geometry = new THREE.SphereGeometry(1, 32, 32);
+        geometry.scale(1.2, 0.8, 1.0);
+      } else if (shape === 'cone') {
+        geometry = new THREE.ConeGeometry(1, 2, 32);
+      }
+      const material = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+      return new THREE.Mesh(geometry, material);
+    }
+
+    function update3DModel() {
+      if (currentModel) {
+        scene.remove(currentModel);
+      }
+      if (currentShape === 'glb' && glbModel) {
+        currentModel = glbModel.clone(); // Use the full .glb model with textures
+        const box = new THREE.Box3().setFromObject(currentModel);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        currentModel.scale.setScalar(2 / maxDim); // Normalize size
+        currentModel.position.sub(center.multiplyScalar(2 / maxDim)); // Center the model
+      } else {
+        currentModel = createSimulatedModel(currentShape);
+      }
+      scene.add(currentModel);
+      controls.reset();
+    }
+
+    // Rotation Sliders
+    const rotX = document.getElementById('rotX');
+    const rotY = document.getElementById('rotY');
+    const rotZ = document.getElementById('rotZ');
+
+    function updateSlidersFromModel() {
+      if (currentModel) {
+        rotX.value = THREE.MathUtils.radToDeg(currentModel.rotation.x) % 360;
+        rotY.value = THREE.MathUtils.radToDeg(currentModel.rotation.y) % 360;
+        rotZ.value = THREE.MathUtils.radToDeg(currentModel.rotation.z) % 360;
+      }
+    }
+
+    function updateModelFromSliders() {
+      if (currentModel) {
+        currentModel.rotation.x = THREE.MathUtils.degToRad(rotX.value);
+        currentModel.rotation.y = THREE.MathUtils.degToRad(rotY.value);
+        currentModel.rotation.z = THREE.MathUtils.degToRad(rotZ.value);
+      }
+    }
+
+    rotX.addEventListener('input', updateModelFromSliders);
+    rotY.addEventListener('input', updateModelFromSliders);
+    rotZ.addEventListener('input', updateModelFromSliders);
+
+    controls.addEventListener('change', () => {
+      updateSlidersFromModel();
+    });
+
+    // Event Listeners
+    const resolutionRadios = document.querySelectorAll('input[name="resolution"]');
+    resolutionRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        currentResolution = parseInt(e.target.value);
+        updateTextures();
+      });
+    });
+
+    const shapeDropdown = document.getElementById('shape');
+    const uploadSection = document.getElementById('uploadSection');
+    shapeDropdown.addEventListener('change', (e) => {
+      currentShape = e.target.value;
+      uploadSection.style.display = currentShape === 'glb' ? 'block' : 'none';
+      if (currentShape !== 'glb') {
+        glbGeometry = null;
+        glbModel = null;
+        updateTextures();
+        update3DModel();
+      }
+    });
+
+    const gltfUpload = document.getElementById('gltfUpload');
+    gltfUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const arrayBuffer = e.target.result;
+                loader.parse(arrayBuffer, '', (gltf) => {
+                    // Remove previous model if exists
+                    if (currentModel) {
+                        scene.remove(currentModel);
+                    }
+
+                    // Add new model
+                    currentModel = gltf.scene;
+                    scene.add(currentModel);
+
+                    // Center and scale the model
+                    const box = new THREE.Box3().setFromObject(currentModel);
+                    const center = box.getCenter(new THREE.Vector3());
+                    const size = box.getSize(new THREE.Vector3());
+                    
+                    // Move to origin
+                    currentModel.position.sub(center);
+                    
+                    // Scale to fit
+                    const maxSize = Math.max(size.x, size.y, size.z);
+                    const scale = 4 / maxSize;
+                    currentModel.scale.set(scale, scale, scale);
+                    
+                    // Adjust camera
+                    camera.position.set(0, 0, Math.max(size.x, size.y, size.z) * 2);
+                    controls.update();
+                }, (error) => {
+                    console.error('Error loading GLB:', error);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+      }
+    });
+
+    updateTextures();
+    update3DModel();
+
+    // WebGL Render Loop
+    function renderCrossSection() {
+      gl.clearColor(0.1, 0.1, 0.1, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      gl.uniformMatrix4fv(mvpLoc, false, mvp);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(positionLoc);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+      gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(texCoordLoc);
+
+      gl.bindTexture(gl.TEXTURE_2D, textures[currentSlice]);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      requestAnimationFrame(renderCrossSection);
+    }
+
+    // Three.js Render Loop
+    function render3D() {
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(render3D);
+    }
+
+    renderCrossSection();
+    render3D();
+  </script>
+</body>
+</html>

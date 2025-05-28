@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OE-Cake Replica in WebGL</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas"></canvas>
+  <script>
+    // WebGL setup
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+    } else {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      // Vertex Shader
+      const vsSource = `
+        attribute vec2 a_position;
+        void main() {
+          gl_PointSize = 5.0;
+          gl_Position = vec4(a_position, 0.0, 1.0);
+        }
+      `;
+
+      // Fragment Shader
+      const fsSource = `
+        precision mediump float;
+        uniform vec3 u_color;
+        void main() {
+          float dist = length(gl_PointCoord - vec2(0.5));
+          if (dist > 0.5) discard;
+          gl_FragColor = vec4(u_color, 1.0 - dist * 2.0);
+        }
+      `;
+
+      // Compile shaders
+      const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertexShader, vsSource);
+      gl.compileShader(vertexShader);
+
+      const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragmentShader, fsSource);
+      gl.compileShader(fragmentShader);
+
+      const program = gl.createProgram();
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+      gl.linkProgram(program);
+      gl.useProgram(program);
+
+      // Particle system
+      const numParticles = 1000;
+      const positions = new Float32Array(numParticles * 2);
+      const velocities = new Float32Array(numParticles * 2);
+
+      // Initialize particles
+      for (let i = 0; i < numParticles; i++) {
+        positions[i * 2] = Math.random() * 2 - 1;     // X (-1 to 1)
+        positions[i * 2 + 1] = Math.random() * 2 - 1; // Y (-1 to 1)
+        velocities[i * 2] = 0;                        // VX
+        velocities[i * 2 + 1] = 0;                    // VY
+      }
+
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+
+      const positionLoc = gl.getAttribLocation(program, 'a_position');
+      gl.enableVertexAttribArray(positionLoc);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+      const colorLoc = gl.getUniformLocation(program, 'u_color');
+
+      // Mouse interaction
+      let mouseX = 0, mouseY = 0, isDragging = false;
+      canvas.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        updateMousePos(e);
+      });
+      canvas.addEventListener('mousemove', updateMousePos);
+      canvas.addEventListener('mouseup', () => isDragging = false);
+
+      function updateMousePos(e) {
+        mouseX = (e.clientX / canvas.width) * 2 - 1;
+        mouseY = -(e.clientY / canvas.height) * 2 + 1;
+      }
+
+      // Physics simulation
+      function updatePhysics() {
+        const gravity = -0.001;
+        const damping = 0.98;
+
+        for (let i = 0; i < numParticles; i++) {
+          let x = positions[i * 2];
+          let y = positions[i * 2 + 1];
+          let vx = velocities[i * 2];
+          let vy = velocities[i * 2 + 1];
+
+          // Gravity
+          vy += gravity;
+
+          // Mouse interaction
+          if (isDragging) {
+            const dx = mouseX - x;
+            const dy = mouseY - y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 0.2) {
+              const force = 0.1 * (0.2 - dist);
+              vx += dx * force;
+              vy += dy * force;
+            }
+          }
+
+          // Update position
+          x += vx;
+          y += vy;
+
+          // Bounce off walls
+          if (x < -1) { x = -1; vx = -vx * 0.8; }
+          if (x > 1) { x = 1; vx = -vx * 0.8; }
+          if (y < -1) { y = -1; vy = -vy * 0.8; }
+          if (y > 1) { y = 1; vy = -vy * 0.8; }
+
+          // Damping
+          vx *= damping;
+          vy *= damping;
+
+          positions[i * 2] = x;
+          positions[i * 2 + 1] = y;
+          velocities[i * 2] = vx;
+          velocities[i * 2 + 1] = vy;
+        }
+
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, positions);
+      }
+
+      // Animation loop
+      function render() {
+        updatePhysics();
+
+        gl.clearColor(0.1, 0.1, 0.2, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.uniform3f(colorLoc, 0.2, 0.6, 1.0); // Light blue particles
+        gl.drawArrays(gl.POINTS, 0, numParticles);
+
+        requestAnimationFrame(render);
+      }
+      render();
+
+      // Resize handling
+      window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      });
+    }
+  </script>
+</body>
+</html>

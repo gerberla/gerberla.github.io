@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive .glb Viewer</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #1a1a1a;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+    #threeCanvas {
+      width: 800px;
+      height: 600px;
+      border: 1px solid #333;
+    }
+    #controls {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .upload-group {
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="threeCanvas"></canvas>
+  <div id="controls">
+    <div class="upload-group">
+      <label for="gltfUpload">Upload .glb File:</label>
+      <input type="file" id="gltfUpload" accept=".glb">
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.134.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://unpkg.com/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
+  <script>
+    // Three.js Setup
+    const canvas = document.getElementById('threeCanvas');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, canvas.width / canvas.height, 0.01, 1000); // Adjusted near/far planes
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
+    renderer.setSize(canvas.width, canvas.height);
+    renderer.setClearColor(0x333333);
+    renderer.setPixelRatio(window.devicePixelRatio); // Improve sharpness
+
+    const controls = new THREE.OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    camera.position.set(0, 0, 5);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    directionalLight.position.set(0, 1, 1);
+    scene.add(directionalLight);
+
+    let currentModel = null;
+    let boundingBoxHelper = null;
+
+    function loadGLB(file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const loader = new THREE.GLTFLoader();
+        loader.parse(event.target.result, '', (gltf) => {
+          if (currentModel) {
+            scene.remove(currentModel);
+          }
+          if (boundingBoxHelper) {
+            scene.remove(boundingBoxHelper);
+          }
+
+          currentModel = gltf.scene;
+
+          // Center the model without scaling initially
+          const box = new THREE.Box3().setFromObject(currentModel);
+          const center = box.getCenter(new THREE.Vector3());
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+
+          currentModel.position.sub(center); // Center at origin
+          console.log('Model size:', size, 'Center:', center, 'Max dimension:', maxDim);
+
+          // Optional scaling if model is too large/small
+          const scaleFactor = maxDim > 10 ? 5 / maxDim : 1; // Scale down if > 10 units, otherwise keep original
+          currentModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
+
+          scene.add(currentModel);
+
+          // Add bounding box helper for debugging
+          boundingBoxHelper = new THREE.Box3Helper(box, 0xffff00); // Yellow box
+          scene.add(boundingBoxHelper);
+
+          // Adjust camera based on model size
+          camera.position.set(0, 0, Math.max(5, maxDim * 1.5));
+          controls.target.set(0, 0, 0); // Look at origin
+          controls.update();
+          controls.reset();
+        }, (error) => {
+          console.error('Error loading .glb:', error);
+          alert('Failed to load the .glb file!');
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // File Upload Event
+    const gltfUpload = document.getElementById('gltfUpload');
+    gltfUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        loadGLB(file);
+      }
+    });
+
+    // Render Loop
+    function animate() {
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>

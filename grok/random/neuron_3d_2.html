@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Neuron with ReLU and View Toggle</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div id="plot" style="width: 100%; height: 100vh;"></div>
+    <button onclick="toggleView()">Toggle Orthographic View</button>
+
+    <script>
+        // Define data for the 3D surface
+        let x = [];
+        let y = [];
+        let z = [];
+
+        // Generate data: x is input, y is weight, z is ReLU(w * x)
+        for (let i = -5; i <= 5; i += 0.5) {
+            x.push(i); // Input values from -5 to 5
+            y.push([]); // Weight values from 0.5 to 2
+            z.push([]);
+            for (let j = 0.5; j <= 2; j += 0.1) {
+                y[x.length - 1].push(j);
+                let weightedSum = i * j; // w * x
+                z[x.length - 1].push(Math.max(0, weightedSum)); // ReLU(w * x)
+            }
+        }
+
+        // Define the surface plot
+        let data = [{
+            x: x,
+            y: y[0], // All rows have same y values
+            z: z,
+            type: 'surface',
+            colorscale: 'Viridis',
+            showscale: true
+        }];
+
+        // Initial layout with perspective view
+        let layout = {
+            title: '3D Neuron Output with ReLU Activation',
+            scene: {
+                xaxis: { title: 'Input (x)' },
+                yaxis: { title: 'Weight (w)' },
+                zaxis: { title: 'Output (ReLU(w * x))' },
+                camera: {
+                    projection: { type: 'perspective' }
+                }
+            },
+            autosize: true,
+            margin: { l: 50, r: 50, b: 50, t: 50 }
+        };
+
+        // Render the plot
+        Plotly.newPlot('plot', data, layout);
+
+        // Toggle function for orthographic/perspective view
+        let isOrthographic = false;
+        function toggleView() {
+            isOrthographic = !isOrthographic;
+            let projectionType = isOrthographic ? 'orthographic' : 'perspective';
+            Plotly.relayout('plot', {
+                'scene.camera.projection.type': projectionType
+            });
+        }
+    </script>
+</body>
+</html>

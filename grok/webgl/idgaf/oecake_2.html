@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OE-Cake Replica with Collisions, Materials, and Tools</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+    #tools {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 5px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas"></canvas>
+  <select id="tools">
+    <option value="fluid">Fluid (Blue)</option>
+    <option value="rigid">Rigid (Red)</option>
+    <option value="elastic">Elastic (Green)</option>
+  </select>
+  <script>
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+    } else {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      // Vertex Shader
+      const vsSource = `
+        attribute vec2 a_position;
+        attribute vec3 a_color;
+        varying vec3 v_color;
+        void main() {
+          gl_PointSize = 8.0;
+          gl_Position = vec4(a_position, 0.0, 1.0);
+          v_color = a_color;
+        }
+      `;
+
+      // Fragment Shader
+      const fsSource = `
+        precision mediump float;
+        varying vec3 v_color;
+        void main() {
+          float dist = length(gl_PointCoord - vec2(0.5));
+          if (dist > 0.5) discard;
+          gl_FragColor = vec4(v_color, 1.0 - dist * 2.0);
+        }
+      `;
+
+      // Compile shaders
+      const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertexShader, vsSource);
+      gl.compileShader(vertexShader);
+
+      const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragmentShader, fsSource);
+      gl.compileShader(fragmentShader);
+
+      const program = gl.createProgram();
+      gl.attachShader(program, vertexShader);
+      gl.attachShader(program, fragmentShader);
+      gl.linkProgram(program);
+      gl.useProgram(program);
+
+      // Particle system
+      const numParticles = 1000;
+      const positions = new Float32Array(numParticles * 2);
+      const velocities = new Float32Array(numParticles * 2);
+      const colors = new Float32Array(numParticles * 3); // RGB per particle
+      const materials = new Uint8Array(numParticles);   // 0: fluid, 1: rigid, 2: elastic
+
+      // Grid for collision detection
+      const gridSize = 0.05;
+      const gridWidth = Math.ceil(2 / gridSize);
+      const gridHeight = Math.ceil(2 / gridSize);
+      const grid = Array(gridWidth * gridHeight).fill().map(() => []);
+
+      // Initialize particles
+      for (let i = 0; i < numParticles; i++) {
+        positions[i * 2] = Math.random() * 2 - 1;
+        positions[i * 2 + 1] = Math.random() * 2 - 1;
+        velocities[i * 2] = 0;
+        velocities[i * 2 + 1] = 0;
+        materials[i] = 0; // Start with fluid
+        colors[i * 3] = 0.2;     // R
+        colors[i * 3 + 1] = 0.6; // G
+        colors[i * 3 + 2] = 1.0; // B
+      }
+
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+      const positionLoc = gl.getAttribLocation(program, 'a_position');
+      gl.enableVertexAttribArray(positionLoc);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+      const colorBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+      const colorLoc = gl.getAttribLocation(program, 'a_color');
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      // Mouse interaction
+      let mouseX = 0, mouseY = 0, isDragging = false;
+      canvas.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        updateMousePos(e);
+        spawnParticle();
+      });
+      canvas.addEventListener('mousemove', (e) => {
+        updateMousePos(e);
+        if (isDragging) spawnParticle();
+      });
+      canvas.addEventListener('mouseup', () => isDragging = false);
+
+      function updateMousePos(e) {
+        mouseX = (e.clientX / canvas.width) * 2 - 1;
+        mouseY = -(e.clientY / canvas.height) * 2 + 1;
+      }
+
+      // Tool selection
+      const toolSelect = document.getElementById('tools');
+      let currentMaterial = 0; // 0: fluid, 1: rigid, 2: elastic
+      toolSelect.addEventListener('change', () => {
+        currentMaterial = ['fluid', 'rigid', 'elastic'].indexOf(toolSelect.value);
+      });
+
+      function spawnParticle() {
+        for (let i = 0; i < numParticles; i++) {
+          if (materials[i] === 255) { // Unused particle slot
+            positions[i * 2] = mouseX + (Math.random() - 0.5) * 0.02;
+            positions[i * 2 + 1] = mouseY + (Math.random() - 0.5) * 0.02;
+            velocities[i * 2] = 0;
+            velocities[i * 2 + 1] = 0;
+            materials[i] = currentMaterial;
+            if (currentMaterial === 0) { // Fluid: Blue
+              colors[i * 3] = 0.2; colors[i * 3 + 1] = 0.6; colors[i * 3 + 2] = 1.0;
+            } else if (currentMaterial === 1) { // Rigid: Red
+              colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.3; colors[i * 3 + 2] = 0.3;
+            } else { // Elastic: Green
+              colors[i * 3] = 0.3; colors[i * 3 + 1] = 1.0; colors[i * 3 + 2] = 0.3;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+            break;
+          }
+        }
+      }
+
+      // Physics and collision
+      function updatePhysics() {
+        const gravity = -0.001;
+        const damping = 0.98;
+
+        // Clear grid
+        for (let i = 0; i < grid.length; i++) grid[i].length = 0;
+
+        // Populate grid
+        for (let i = 0; i < numParticles; i++) {
+          if (materials[i] === 255) continue; // Skip unused particles
+          const x = (positions[i * 2] + 1) / gridSize;
+          const y = (positions[i * 2 + 1] + 1) / gridSize;
+          const gx = Math.floor(x);
+          const gy = Math.floor(y);
+          if (gx >= 0 && gx < gridWidth && gy >= 0 && gy < gridHeight) {
+            grid[gy * gridWidth + gx].push(i);
+          }
+        }
+
+        // Update particles
+        for (let i = 0; i < numParticles; i++) {
+          if (materials[i] === 255) continue; // Skip unused particles
+          let x = positions[i * 2];
+          let y = positions[i * 2 + 1];
+          let vx = velocities[i * 2];
+          let vy = velocities[i * 2 + 1];
+
+          // Gravity (except rigid)
+          if (materials[i] !== 1) vy += gravity;
+
+          // Mouse interaction
+          if (isDragging) {
+            const dx = mouseX - x;
+            const dy = mouseY - y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 0.2) {
+              const force = 0.1 * (0.2 - dist);
+              vx += dx * force;
+              vy += dy * force;
+            }
+          }
+
+          // Collision detection
+          const gx = Math.floor((x + 1) / gridSize);
+          const gy = Math.floor((y + 1) / gridSize);
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = gx + dx;
+              const ny = gy + dy;
+              if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight) {
+                const cell = grid[ny * gridWidth + nx];
+                for (const j of cell) {
+                  if (i === j) continue;
+                  const dx = positions[j * 2] - x;
+                  const dy = positions[j * 2 + 1] - y;
+                  const dist = Math.sqrt(dx * dx + dy * dy);
+                  if (dist < 0.02) {
+                    const overlap = 0.02 - dist;
+                    const nx = dx / dist;
+                    const ny = dy / dist;
+                    if (materials[i] === 1 && materials[j] === 1) { // Rigid-rigid
+                      vx -= nx * overlap * 0.5;
+                      vy -= ny * overlap * 0.5;
+                      velocities[j * 2] += nx * overlap * 0.5;
+                      velocities[j * 2 + 1] += ny * overlap * 0.5;
+                    } else if (materials[i] === 2 || materials[j] === 2) { // Elastic
+                      vx -= nx * overlap * 0.3;
+                      vy -= ny * overlap * 0.3;
+                    } else { // Fluid
+                      vx -= nx * overlap * 0.1;
+                      vy -= ny * overlap * 0.1;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Update position
+          x += vx;
+          y += vy;
+
+          // Bounce off walls
+          if (x < -1) { x = -1; vx = -vx * 0.8; }
+          if (x > 1) { x = 1; vx = -vx * 0.8; }
+          if (y < -1) { y = -1; vy = -vy * 0.8; }
+          if (y > 1) { y = 1; vy = -vy * 0.8; }
+
+          // Damping
+          vx *= damping;
+          vy *= damping;
+
+          positions[i * 2] = x;
+          positions[i * 2 + 1] = y;
+          velocities[i * 2] = vx;
+          velocities[i * 2 + 1] = vy;
+        }
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, positions);
+      }
+
+      // Animation loop
+      function render() {
+        updatePhysics();
+
+        gl.clearColor(0.1, 0.1, 0.2, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.drawArrays(gl.POINTS, 0, numParticles);
+
+        requestAnimationFrame(render);
+      }
+      render();
+
+      // Resize handling
+      window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      });
+
+      // Initialize with some particles
+      for (let i = 0; i < numParticles; i++) materials[i] = 255; // Mark all as unused initially
+      for (let i = 0; i < 100; i++) spawnParticle(); // Spawn some initial fluid particles
+    }
+  </script>
+</body>
+</html>

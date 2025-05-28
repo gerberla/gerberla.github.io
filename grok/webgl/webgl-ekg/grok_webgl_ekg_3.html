@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time EKG Heatmap (WebGL)</title>
+  <style>
+    .controls { margin: 10px 0; }
+    .slider-container { margin: 5px 0; }
+    canvas { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas" width="900" height="600"></canvas>
+  <div class="controls">
+    <div class="slider-container">
+      <label>BPM:</label><input type="range" min="30" max="120" value="60" step="1" id="bpmSlider"/>
+      <label id="bpm">60</label>
+    </div>
+    <div class="slider-container">
+      <label>Intensity:</label><input type="range" min="1" max="50" value="10" step="1" id="intensitySlider"/>
+      <label id="intensity">10</label>
+    </div>
+    <div class="slider-container">
+      <label>Detection Width:</label><input type="range" min="1" max="20" value="5" step="1" id="widthSlider"/>
+      <label id="width">5</label>
+    </div>
+  </div>
+
+  <script>
+  // WebGL Setup
+  var canvas = document.getElementById('glCanvas');
+  var gl = canvas.getContext('webgl');
+  if (!gl) {
+    alert('WebGL not supported!');
+    throw new Error('WebGL not supported');
+  }
+
+  const vertexShaderSource = `
+    attribute vec2 a_position;
+    attribute vec2 a_texCoord;
+    varying vec2 v_texCoord;
+    void main() {
+      gl_Position = vec4(a_position, 0.0, 1.0);
+      v_texCoord = a_texCoord;
+    }
+  `;
+
+  const fragmentShaderSource = `
+    precision mediump float;
+    uniform sampler2D u_texture;
+    varying vec2 v_texCoord;
+    void main() {
+      float value = texture2D(u_texture, v_texCoord).r; // 0-1
+      vec3 color = vec3(0.0);
+      if (value > 0.0) {
+        if (value < 0.33) color = vec3(value / 0.33, 0.0, 0.0);
+        else if (value < 0.66) color = vec3(1.0, (value - 0.33) / 0.33, 0.0);
+        else color = vec3(1.0, 1.0, (value - 0.66) / 0.34);
+      }
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  function createShader(gl, type, source) {
+    var shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+  var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+  var program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(program));
+  }
+  gl.useProgram(program);
+
+  var positionBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  var positions = new Float32Array([
+    -1, -1,  0, 0,  // Bottom-left
+     1, -1,  1, 0,  // Bottom-right
+    -1,  1,  0, 1,  // Top-left
+     1,  1,  1, 1   // Top-right
+  ]);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+  var positionLoc = gl.getAttribLocation(program, 'a_position');
+  var texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+  gl.enableVertexAttribArray(positionLoc);
+  gl.enableVertexAttribArray(texCoordLoc);
+  gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 16, 0);
+  gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 16, 8);
+
+  // Texture setup
+  var timeSize = 900;   // Time (x-axis, rows)
+  var ampSize = 600;    // Amplitude (y-axis, columns)
+  var texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  var textureData = new Uint8Array(timeSize * ampSize);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, timeSize, ampSize, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+
+  // EKG Parameters
+  var bpm = 60;
+  var intensity = 10;
+  var detectionWidth = 5;
+  var sampleRate = 100; // Updates per second
+  var samplesPerBeat = sampleRate * (60 / bpm);
+  var timeStep = 0;
+
+  function generateEKG(t) {
+    var beatPhase = (t % samplesPerBeat) / samplesPerBeat; // 0-1
+    var signal = 0;
+    if (beatPhase < 0.1) { // P wave
+      signal = 0.1 * Math.sin(Math.PI * beatPhase / 0.1);
+    } else if (beatPhase < 0.3) { // QRS complex
+      var qrsT = (beatPhase - 0.1) / 0.2;
+      signal = (intensity / 10) * (qrsT < 0.5 ? -0.5 * qrsT : 2 * (1 - qrsT));
+    } else if (beatPhase < 0.5) { // T wave
+      signal = 0.2 * Math.sin(Math.PI * (beatPhase - 0.3) / 0.2);
+    }
+    return signal;
+  }
+
+  // Animation
+  var lastUpdate = performance.now();
+
+  function updateGraph(currentTime) {
+    var deltaTime = (currentTime - lastUpdate) / 1000;
+    lastUpdate = currentTime;
+
+    var steps = Math.floor(deltaTime * sampleRate);
+    for (var s = 0; s < steps; s++) {
+      timeStep++;
+
+      // Shift texture data left (time moves left to right)
+      for (var x = 0; x < timeSize - 1; x++) {
+        for (var y = 0; y < ampSize; y++) {
+          textureData[y * timeSize + x] = textureData[y * timeSize + (x + 1)];
+        }
+      }
+
+      // Clear last column
+      for (var y = 0; y < ampSize; y++) {
+        textureData[y * timeSize + (timeSize - 1)] = 0;
+      }
+
+      // Generate EKG signal
+      var signal = generateEKG(timeStep);
+      var yCenter = ampSize / 2;
+      var y = Math.floor(yCenter + signal * (ampSize / 4)); // Scale to 1/4 height
+      y = Math.max(0, Math.min(ampSize - 1, y));
+
+      // Add single EKG peak
+      var peakValue = 255;
+      textureData[y * timeSize + (timeSize - 1)] = peakValue;
+      for (var i = 1; i <= detectionWidth; i++) {
+        var yPlus = y + i;
+        var yMinus = y - i;
+        var fade = peakValue * (1 - i / (detectionWidth + 1));
+        if (yPlus < ampSize) textureData[yPlus * timeSize + (timeSize - 1)] = fade;
+        if (yMinus >= 0) textureData[yMinus * timeSize + (timeSize - 1)] = fade;
+      }
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, timeSize, ampSize, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
+
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    requestAnimationFrame(updateGraph);
+  }
+
+  // Slider initialization
+  function sliderInput(el, min, max, steps, value, labelFormat) {
+    var slider = document.getElementById(el);
+    slider.setAttribute("min", min);
+    slider.setAttribute("max", max);
+    slider.setAttribute("step", (max - min) / steps);
+    slider.setAttribute("value", value);
+    slider.addEventListener("input", function() {
+      var val = parseFloat(this.value);
+      if (el === "bpmSlider") {
+        bpm = val;
+        samplesPerBeat = sampleRate * (60 / bpm);
+        document.getElementById("bpm").innerHTML = val;
+      } else if (el === "intensitySlider") {
+        intensity = val;
+        document.getElementById("intensity").innerHTML = val;
+      } else if (el === "widthSlider") {
+        detectionWidth = val;
+        document.getElementById("width").innerHTML = val;
+      }
+    });
+    document.getElementById(el.replace("Slider", "")).innerHTML = labelFormat ? labelFormat(value) : value;
+    return slider;
+  }
+
+  sliderInput("bpmSlider", 30, 120, 90, 60);
+  sliderInput("intensitySlider", 1, 50, 49, 10);
+  sliderInput("widthSlider", 1, 20, 19, 5);
+
+  // Initial render
+  gl.clearColor(0.5, 0.5, 0.5, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  requestAnimationFrame(updateGraph);
+  </script>
+</body>
+</html>

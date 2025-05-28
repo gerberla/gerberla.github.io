@@ -1,0 +1,1 @@
+The goal is to load a 3D Model and rotate it. The cross sections of that rotation are then displayed in typical MRI fashion.

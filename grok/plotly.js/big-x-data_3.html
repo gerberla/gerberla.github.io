@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Plotly Zoom Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 80vh;
+        }
+        #pointCount {
+            margin-top: 10px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Dynamic Zoom Demo with Concentric Circles</h2>
+    <div id="chart"></div>
+    <div id="pointCount">Total Points: 0</div>
+
+    <script>
+        // Mock backend to generate points on uniform concentric circles
+        function mockBackend(x_min, x_max, maxPoints = 1000) {
+            const d = 0.1; // Fixed distance between circles
+            const data = [];
+            const maxRadius = Math.max(Math.abs(x_min), Math.abs(x_max)); // Largest radius in view
+            const numCircles = Math.ceil(maxRadius / d); // Number of circles up to max radius
+
+            // Estimate points per circle to stay near maxPoints
+            const pointsPerCircle = Math.max(8, Math.floor(maxPoints / numCircles));
+
+            for (let n = 1; n <= numCircles; n++) {
+                const r = n * d; // Radius of current circle
+                const thetaStep = 2 * Math.PI / pointsPerCircle; // Angular step for uniform spacing
+
+                for (let i = 0; i < pointsPerCircle; i++) {
+                    const theta = i * thetaStep;
+                    const x = r * Math.cos(theta);
+                    const y = r * Math.sin(theta);
+
+                    // Only include points within the x-axis range
+                    if (x >= x_min && x <= x_max) {
+                        data.push({ x: x, y: y });
+                    }
+                }
+            }
+
+            return data;
+        }
+
+        // Initial range and data
+        const initialRange = [-1, 1]; // Symmetric to show full circles initially
+        const initialData = mockBackend(initialRange[0], initialRange[1]);
+
+        // Initialize the Plotly chart as a scatter plot
+        Plotly.newPlot('chart', [{
+            x: initialData.map(d => d.x),
+            y: initialData.map(d => d.y),
+            type: 'scatter',
+            mode: 'markers',
+            marker: { size: 5, color: '#1f77b4' }
+        }], {
+            title: 'Zoomable Concentric Circles (Archery Target Style)',
+            xaxis: { range: initialRange, title: 'X Axis' },
+            yaxis: { range: [-1, 1], title: 'Y Axis' }, // Symmetric for circular display
+            margin: { t: 50, r: 50, b: 50, l: 50 }
+        });
+
+        // Reference to the chart and point count elements
+        const chart = document.getElementById('chart');
+        const pointCountDiv = document.getElementById('pointCount');
+
+        // Update point count display
+        function updatePointCount(count) {
+            pointCountDiv.textContent = `Total Points: ${count}`;
+        }
+
+        // Handle zoom and pan events
+        chart.on('plotly_relayout', function(eventdata) {
+            if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
+                const x_min = eventdata['xaxis.range[0]'];
+                const x_max = eventdata['xaxis.range[1]'];
+                // Fetch new data for the updated range
+                const newData = mockBackend(x_min, x_max);
+                const pointCount = newData.length;
+                // Update the chart
+                Plotly.restyle(chart, {
+                    x: [newData.map(d => d.x)],
+                    y: [newData.map(d => d.y)]
+                });
+                // Update the point count display
+                updatePointCount(pointCount);
+            }
+        });
+
+        // Initial point count display
+        updatePointCount(initialData.length);
+    </script>
+</body>
+</html>

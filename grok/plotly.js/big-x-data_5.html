@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Plotly Zoom Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 80vh;
+        }
+        #pointCount {
+            margin-top: 10px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Dynamic Zoom Demo with Three Concentric Circles</h2>
+    <div id="chart"></div>
+    <div id="pointCount">Total Points: 0</div>
+
+    <script>
+        // Mock backend to generate points on three fixed concentric circles with variance
+        function mockBackend(x_min, x_max) {
+            const d = 0.3; // Increased distance between rings (wider spacing)
+            const maxRadius = 0.9; // Three rings at 0.3, 0.6, 0.9
+            const numCircles = 3; // Fixed to three rings
+            const rangeWidth = x_max - x_min;
+            const basePointsPerCircle = 100; // Minimum points per circle when zoomed out
+            const maxPoints = 10000; // Increased upper limit on total points
+
+            // Increase density inversely with range width, capped by maxPoints
+            const densityFactor = Math.min(20, 1 / rangeWidth); // Up to 20x density when zoomed in
+            const pointsPerCircle = Math.max(basePointsPerCircle, Math.floor(basePointsPerCircle * densityFactor));
+            const adjustedPointsPerCircle = Math.min(pointsPerCircle, Math.floor(maxPoints / numCircles));
+
+            const data = [];
+            for (let n = 1; n <= numCircles; n++) {
+                const r = n * d; // Fixed radii: 0.3, 0.6, 0.9
+                const thetaStep = 2 * Math.PI / adjustedPointsPerCircle;
+
+                for (let i = 0; i < adjustedPointsPerCircle; i++) {
+                    const theta = i * thetaStep;
+                    // Add variance to the radius (up to 10% of ring spacing)
+                    const variance = (Math.random() - 0.5) * 0.1 * d;
+                    const variedRadius = r + variance;
+                    const x = variedRadius * Math.cos(theta);
+                    const y = variedRadius * Math.sin(theta);
+
+                    // Only include points within x-axis range and original extents
+                    if (x >= x_min && x <= x_max && variedRadius <= maxRadius) {
+                        data.push({ x: x, y: y });
+                    }
+                }
+            }
+
+            return data;
+        }
+
+        // Initial range and data
+        const initialRange = [-1, 1];
+        const initialData = mockBackend(initialRange[0], initialRange[1]);
+
+        // Initialize the Plotly chart as a scatter plot
+        Plotly.newPlot('chart', [{
+            x: initialData.map(d => d.x),
+            y: initialData.map(d => d.y),
+            type: 'scatter',
+            mode: 'markers',
+            marker: { size: 5, color: '#1f77b4' }
+        }], {
+            title: 'Zoomable Three Concentric Circles with Variance',
+            xaxis: { range: initialRange, title: 'X Axis' },
+            yaxis: { range: [-1, 1], title: 'Y Axis' },
+            margin: { t: 50, r: 50, b: 50, l: 50 }
+        });
+
+        // Reference to the chart and point count elements
+        const chart = document.getElementById('chart');
+        const pointCountDiv = document.getElementById('pointCount');
+
+        // Update point count display
+        function updatePointCount(count) {
+            pointCountDiv.textContent = `Total Points: ${count}`;
+        }
+
+        // Handle zoom and pan events
+        chart.on('plotly_relayout', function(eventdata) {
+            if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
+                const x_min = eventdata['xaxis.range[0]'];
+                const x_max = eventdata['xaxis.range[1]'];
+                const newData = mockBackend(x_min, x_max);
+                const pointCount = newData.length;
+                Plotly.restyle(chart, {
+                    x: [newData.map(d => d.x)],
+                    y: [newData.map(d => d.y)]
+                });
+                updatePointCount(pointCount);
+            }
+        });
+
+        // Initial point count display
+        updatePointCount(initialData.length);
+    </script>
+</body>
+</html>

@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ballistic Missile Trajectory KML Generator</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+      font-family: Arial, sans-serif;
+      color: #fff;
+    }
+    #glCanvas {
+      flex: 1;
+      width: 100%;
+    }
+    #controls {
+      padding: 10px;
+      background: #2d2d2d;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    #controls label {
+      margin-right: 5px;
+    }
+    #controls input, #controls select {
+      padding: 5px;
+      background: #3a3a3a;
+      border: none;
+      color: #fff;
+      border-radius: 4px;
+    }
+    #controls button {
+      padding: 5px 10px;
+      background: #4a4a4a;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    #controls button:hover {
+      background: #5a5a5a;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>Launch Lat: <input type="number" id="launchLat" value="35.6762" step="0.0001" min="-90" max="90" onchange="updateTrajectory()"></label>
+    <label>Launch Lon: <input type="number" id="launchLon" value="139.6503" step="0.0001" min="-180" max="180" onchange="updateTrajectory()"></label>
+    <label>Target Lat: <input type="number" id="targetLat" value="38.9072" step="0.0001" min="-90" max="90" onchange="updateTrajectory()"></label>
+    <label>Target Lon: <input type="number" id="targetLon" value="-77.0369" step="0.0001" min="-180" max="180" onchange="updateTrajectory()"></label>
+    <label>Range:
+      <select id="range" onchange="updateTrajectory()">
+        <option value="2500">Short (2500 km)</option>
+        <option value="5500" selected>Medium (5500 km)</option>
+        <option value="12000">ICBM (12000 km)</option>
+      </select>
+    </label>
+    <button onclick="downloadKML()">Download KML</button>
+  </div>
+  <canvas id="glCanvas"></canvas>
+  <script>
+    // Canvas and WebGL setup
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+      throw new Error('WebGL not supported');
+    }
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight - document.getElementById('controls').offsetHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Shaders
+    const vertexShaderSource = `
+      attribute vec3 a_position;
+      attribute vec3 a_color;
+      uniform mat4 u_mvp;
+      varying vec3 v_color;
+      void main() {
+        gl_Position = u_mvp * vec4(a_position, 1.0);
+        v_color = a_color;
+      }
+    `;
+
+    const fragmentShaderSource = `
+      precision mediump float;
+      varying vec3 v_color;
+      void main() {
+        gl_FragColor = vec4(v_color, 1.0);
+      }
+    `;
+
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program error:', gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    // Simulated Blue Marble texture
+    const mapTexture = gl.createTexture();
+    const mapWidth = 512;
+    const mapHeight = 256;
+    const mapData = new Uint8Array(mapWidth * mapHeight * 4);
+    for (let y = 0; y < mapHeight; y++) {
+      for (let x = 0; x < mapWidth; x++) {
+        const i = (y * mapWidth + x) * 4;
+        const lat = (y / mapHeight) * 180 - 90;
+        const lon = (x / mapWidth) * 360 - 180;
+        const land = Math.sin(lon * 0.05) * Math.cos(lat * 0.05) > 0 ? 1 : 0;
+        mapData[i] = land ? 50 : 0;
+        mapData[i + 1] = land ? 100 : 50;
+        mapData[i + 2] = land ? 50 : 150;
+        mapData[i + 3] = 255;
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, mapTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, mapWidth, mapHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, mapData);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // Buffers
+    const mapBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, mapBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -180, -90, 0,  180, -90, 0,  -180, 90, 0,  180, 90, 0
+    ]), gl.STATIC_DRAW);
+
+    const mapTexCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, mapTexCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, 1,  1, 1,  0, 0,  1, 0
+    ]), gl.STATIC_DRAW);
+
+    const trajBuffer = gl.createBuffer();
+    const trajColorBuffer = gl.createBuffer();
+    const pointsBuffer = gl.createBuffer();
+    const pointsColorBuffer = gl.createBuffer();
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    const colorLoc = gl.getAttribLocation(program, 'a_color');
+    const mvpLoc = gl.getUniformLocation(program, 'u_mvp');
+
+    // ECEF and trajectory calculation
+    const R = 6371; // Earth's radius in km
+    let kmlTrajectory = [];
+
+    function latLonToECEF(lat, lon) {
+      const radLat = lat * Math.PI / 180;
+      const radLon = lon * Math.PI / 180;
+      const x = R * Math.cos(radLat) * Math.cos(radLon);
+      const y = R * Math.cos(radLat) * Math.sin(radLon);
+      const z = R * Math.sin(radLat);
+      return [x, y, z];
+    }
+
+    function ecefToLatLonAlt(x, y, z) {
+      const r = Math.sqrt(x * x + y * y + z * z);
+      const lon = Math.atan2(y, x) * 180 / Math.PI;
+      const lat = Math.asin(z / r) * 180 / Math.PI;
+      const alt = r - R; // Altitude in km
+      return [lat, lon, alt];
+    }
+
+    function latLonToMap(lat, lon) {
+      return [lon, lat, 0];
+    }
+
+    function generateTrajectory(launchLat, launchLon, targetLat, targetLon, range) {
+      const start = latLonToECEF(launchLat, launchLon);
+      const end = latLonToECEF(targetLat, targetLon);
+      const numPoints = 100;
+      const trajectory = [];
+      const trajColors = [];
+      kmlTrajectory = [];
+
+      const maxHeight = range * 0.1;
+      for (let t = 0; t <= 1; t += 1 / numPoints) {
+        const x = start[0] + (end[0] - start[0]) * t;
+        const y = start[1] + (end[1] - start[1]) * t;
+        const z = start[2] + (end[2] - start[2]) * t;
+        const height = maxHeight * 4 * t * (1 - t);
+        const r = R + height;
+        const scale = r / Math.sqrt(x * x + y * y + z * z);
+        const xEcef = x * scale;
+        const yEcef = y * scale;
+        const zEcef = z * scale;
+        trajectory.push(xEcef, yEcef, zEcef);
+        trajColors.push(1 - t, 0, t);
+        const [lat, lon, alt] = ecefToLatLonAlt(xEcef, yEcef, zEcef);
+        kmlTrajectory.push([lon, lat, alt * 1000]); // KML uses meters
+      }
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, trajBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(trajectory), gl.STATIC_DRAW);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, trajColorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(trajColors), gl.STATIC_DRAW);
+
+      const points = [
+        ...latLonToMap(launchLat, launchLon),
+        ...latLonToMap(targetLat, targetLon)
+      ];
+      const pointColors = [
+        1, 0, 0,
+        0, 0, 1
+      ];
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointsBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(points), gl.STATIC_DRAW);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointsColorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pointColors), gl.STATIC_DRAW);
+    }
+
+    // KML download
+    function downloadKML() {
+      const kmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Missile Trajectory</name>
+    <Style id="trajectoryStyle">
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>4</width>
+      </LineStyle>
+    </Style>
+    <Placemark>
+      <name>Trajectory</name>
+      <styleUrl>#trajectoryStyle</styleUrl>
+      <LineString>
+        <extrude>1</extrude>
+        <tessellate>1</tessellate>
+        <altitudeMode>absolute</altitudeMode>
+        <coordinates>
+          ${kmlTrajectory.map(point => point.join(',')).join('\n          ')}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+      const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'missile_trajectory.kml';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }
+
+    // Matrix functions
+    function perspective(fovy, aspect, near, far) {
+      const f = 1.0 / Math.tan(fovy / 2);
+      const nf = 1 / (near - far);
+      return [
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (far + near) * nf, -1,
+        0, 0, 2 * far * near * nf, 0
+      ];
+    }
+
+    function lookAt(eye, center, up) {
+      const f = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
+      const fLen = Math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+      f[0] /= fLen; f[1] /= fLen; f[2] /= fLen;
+      const s = [f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]];
+      const sLen = Math.sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+      s[0] /= sLen; s[1] /= sLen; s[2] /= sLen;
+      const u = [s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]];
+      return [
+        s[0], u[0], -f[0], 0,
+        s[1], u[1], -f[1], 0,
+        s[2], u[2], -f[2], 0,
+        -(s[0] * eye[0] + s[1] * eye[1] + s[2] * eye[2]),
+        -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]),
+        (f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2]), 1
+      ];
+    }
+
+    function multiplyMatrix(a, b) {
+      const result = new Float32Array(16);
+      for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+          result[i * 4 + j] = 0;
+          for (let k = 0; k < 4; k++) {
+            result[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+          }
+        }
+      }
+      return result;
+    }
+
+    // Initial trajectory
+    updateTrajectory();
+
+    // Update function
+    function updateTrajectory() {
+      const launchLat = parseFloat(document.getElementById('launchLat').value);
+      const launchLon = parseFloat(document.getElementById('launchLon').value);
+      const targetLat = parseFloat(document.getElementById('targetLat').value);
+      const targetLon = parseFloat(document.getElementById('targetLon').value);
+      const range = parseFloat(document.getElementById('range').value);
+      generateTrajectory(launchLat, launchLon, targetLat, targetLon, range);
+    }
+
+    // Render
+    let time = 0;
+    function render() {
+      gl.clearColor(0.1, 0.1, 0.1, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+
+      time += 0.01;
+      const proj = perspective(Math.PI / 3, canvas.width / canvas.height, 0.1, 20000);
+      const view = lookAt(
+        [0, -10000, 5000],
+        [0, 0, 0],
+        [0, 0, 1]
+      );
+      const mvp = multiplyMatrix(proj, view);
+
+      gl.uniformMatrix4fv(mvpLoc, false, mvp);
+
+      // Draw simulated Blue Marble map
+      gl.bindBuffer(gl.ARRAY_BUFFER, mapBuffer);
+      gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(positionLoc);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, mapTexCoordBuffer);
+      gl.vertexAttribPointer(colorLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(colorLoc);
+
+      gl.bindTexture(gl.TEXTURE_2D, mapTexture);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Draw trajectory
+      gl.bindBuffer(gl.ARRAY_BUFFER, trajBuffer);
+      gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, trajColorBuffer);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.drawArrays(gl.LINE_STRIP, 0, 100);
+
+      // Draw launch and target points
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointsBuffer);
+      gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointsColorBuffer);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.drawArrays(gl.POINTS, 0, 2);
+
+      requestAnimationFrame(render);
+    }
+
+    render();
+  </script>
+</body>
+</html>

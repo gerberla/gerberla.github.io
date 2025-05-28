@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Optimized Plotly.js 3D Octree with Heatmap Cross-Section & GLB Upload</title>
+    <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.134.0/examples/js/loaders/GLTFLoader.js"></script>
+    <style>
+        body {
+            background-color: #1f2527;
+            margin: 0;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+        }
+        .chart-container {
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .chart-container > div {
+            width: 50%;
+            height: 600px;
+        }
+        .controls-container {
+            padding: 15px;
+            background-color: #2c3436;
+            border-top: 1px solid #444;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+            justify-content: center;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        select, input[type="radio"] + label, input[type="range"], input[type="file"] {
+            padding: 8px;
+            background-color: #3a4446;
+            color: #ffffff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        select {
+            min-width: 150px;
+        }
+        input[type="radio"] {
+            display: none;
+        }
+        input[type="radio"] + label {
+            cursor: pointer;
+            padding: 8px 12px;
+            transition: background-color 0.2s;
+        }
+        input[type="radio"]:checked + label {
+            background-color: #66b3ff;
+            color: #1f2527;
+        }
+        input[type="range"] {
+            width: 300px;
+            -webkit-appearance: none;
+            background: #444;
+            height: 8px;
+            border-radius: 4px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #66b3ff;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #66b3ff;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="chart-container">
+        <div id="chart3d"></div>
+        <div id="chart2d"></div>
+    </div>
+    <div class="controls-container">
+        <div class="control-group">
+            <label>Cross-Section Axis:</label>
+            <input type="radio" name="axis" id="axis-x" value="x" checked><label for="axis-x">X</label>
+            <input type="radio" name="axis" id="axis-y" value="y"><label for="axis-y">Y</label>
+            <input type="radio" name="axis" id="axis-z" value="z"><label for="axis-z">Z</label>
+        </div>
+        <div class="control-group">
+            <label for="dataset">Dataset:</label>
+            <select id="dataset">
+                <option value="cone" selected>Cone</option>
+                <option value="spheres">Concentric Spheres</option>
+                <option value="torus">Torus</option>
+                <option value="helix">Helix</option>
+                <option value="cubecluster">Cube Cluster</option>
+                <option value="glb">Upload GLB File</option>
+            </select>
+            <input type="file" id="glb-upload" accept=".glb" style="display: none;">
+        </div>
+        <div class="control-group">
+            <label id="slider-label">X Slice: </label>
+            <input type="range" id="axis-slider" min="0" max="100" step="0.01" value="50">
+        </div>
+        <div class="control-group">
+            <label id="thickness-label">Thickness (%): </label>
+            <input type="range" id="thickness-slider" min="0" max="100" step="0.1" value="1">
+        </div>
+    </div>
+
+    <script>
+        // Data generation functions (reduced to 2000 points)
+        function generateSphereData(numPoints = 2000) {
+            const points = [];
+            const shells = 20;
+            const pointsPerShell = numPoints / shells;
+            for (let r = 1; r <= shells; r++) {
+                const radius = r * 0.5;
+                for (let i = 0; i < pointsPerShell; i++) {
+                    const theta = Math.random() * 2 * Math.PI;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    const sineMod = Math.sin(theta * 4 + phi * 4) * 0.2;
+                    const rMod = radius + sineMod;
+                    const x = rMod * Math.sin(phi) * Math.cos(theta);
+                    const y = rMod * Math.sin(phi) * Math.sin(theta);
+                    const z = rMod * Math.cos(phi);
+                    points.push({x, y, z});
+                }
+            }
+            return points;
+        }
+
+        function generateConeData(numPoints = 2000) {
+            const points = [];
+            const height = 10;
+            const maxRadius = 5;
+            for (let i = 0; i < numPoints; i++) {
+                const z = Math.random() * height;
+                const radius = maxRadius * (1 - z / height);
+                const theta = Math.random() * 2 * Math.PI;
+                const rNoise = (Math.random() - 0.5) * 0.2;
+                const r = Math.max(0, radius + rNoise);
+                const x = r * Math.cos(theta);
+                const y = r * Math.sin(theta);
+                points.push({x, y, z});
+            }
+            return points;
+        }
+
+        function generateTorusData(numPoints = 2000) {
+            const points = [];
+            const tubeRadius = 2;
+            const ringRadius = 5;
+            for (let i = 0; i < numPoints; i++) {
+                const theta = Math.random() * 2 * Math.PI;
+                const phi = Math.random() * 2 * Math.PI;
+                const noise = (Math.random() - 0.5) * 0.2;
+                const x = (ringRadius + (tubeRadius + noise) * Math.cos(phi)) * Math.cos(theta);
+                const y = (ringRadius + (tubeRadius + noise) * Math.cos(phi)) * Math.sin(theta);
+                const z = (tubeRadius + noise) * Math.sin(phi);
+                points.push({x, y, z});
+            }
+            return points;
+        }
+
+        function generateHelixData(numPoints = 2000) {
+            const points = [];
+            const height = 10;
+            const radius = 3;
+            const turns = 5;
+            for (let i = 0; i < numPoints; i++) {
+                const t = Math.random() * turns * 2 * Math.PI;
+                const z = (t / (turns * 2 * Math.PI)) * height;
+                const noise = (Math.random() - 0.5) * 0.2;
+                const r = radius + noise;
+                const x = r * Math.cos(t);
+                const y = r * Math.sin(t);
+                points.push({x, y, z});
+            }
+            return points;
+        }
+
+        function generateCubeClusterData(numPoints = 2000) {
+            const points = [];
+            const cubeSize = 2;
+            const numCubes = 5;
+            for (let i = 0; i < numPoints; i++) {
+                const cubeIdx = Math.floor(Math.random() * numCubes);
+                const offsetX = (cubeIdx % 3 - 1) * cubeSize * 1.5;
+                const offsetY = (Math.floor(cubeIdx / 3) - 1) * cubeSize * 1.5;
+                const offsetZ = Math.random() > 0.5 ? cubeSize : -cubeSize;
+                const x = offsetX + (Math.random() - 0.5) * cubeSize;
+                const y = offsetY + (Math.random() - 0.5) * cubeSize;
+                const z = offsetZ + (Math.random() - 0.5) * cubeSize;
+                points.push({x, y, z});
+            }
+            return points;
+        }
+
+        // Precompute datasets
+        const datasets = {
+            cone: generateConeData(),
+            spheres: generateSphereData(),
+            torus: generateTorusData(),
+            helix: generateHelixData(),
+            cubecluster: generateCubeClusterData(),
+            glb: [] // Placeholder for uploaded GLB points
+        };
+
+        // GLB to Point Cloud Conversion with Interpolation
+        function convertGLBToPointCloud(file, callback) {
+            const loader = new THREE.GLTFLoader();
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                loader.parse(event.target.result, '', function(gltf) {
+                    let originalPoints = [];
+                    gltf.scene.traverse(function(child) {
+                        if (child.isMesh) {
+                            const geometry = child.geometry;
+                            const positionAttribute = geometry.getAttribute('position');
+                            for (let i = 0; i < positionAttribute.count; i++) {
+                                const x = positionAttribute.getX(i);
+                                const y = positionAttribute.getY(i);
+                                const z = positionAttribute.getZ(i);
+                                originalPoints.push({x, y, z});
+                            }
+                        }
+                    });
+
+                    const targetPointCount = 5000;
+                    let finalPoints = [];
+
+                    if (originalPoints.length >= targetPointCount) {
+                        const sampleRate = Math.max(1, Math.floor(originalPoints.length / targetPointCount));
+                        for (let i = 0; i < originalPoints.length; i += sampleRate) {
+                            finalPoints.push(originalPoints[i]);
+                        }
+                    } else {
+                        finalPoints = [...originalPoints];
+                        const neededPoints = targetPointCount - originalPoints.length;
+                        const interpolationSteps = Math.ceil(neededPoints / (originalPoints.length - 1));
+
+                        for (let i = 0; i < originalPoints.length - 1 && finalPoints.length < targetPointCount; i++) {
+                            const p1 = originalPoints[i];
+                            const p2 = originalPoints[i + 1];
+                            for (let j = 1; j <= interpolationSteps && finalPoints.length < targetPointCount; j++) {
+                                const t = j / (interpolationSteps + 1);
+                                const x = p1.x + t * (p2.x - p1.x);
+                                const y = p1.y + t * (p2.y - p1.y);
+                                const z = p1.z + t * (p2.z - p1.z);
+                                finalPoints.push({x, y, z});
+                            }
+                        }
+                        while (finalPoints.length < targetPointCount) {
+                            const randomIdx = Math.floor(Math.random() * originalPoints.length);
+                            const basePoint = originalPoints[randomIdx];
+                            const noise = 0.01;
+                            finalPoints.push({
+                                x: basePoint.x + (Math.random() - 0.5) * noise,
+                                y: basePoint.y + (Math.random() - 0.5) * noise,
+                                z: basePoint.z + (Math.random() - 0.5) * noise
+                            });
+                        }
+                    }
+
+                    callback(finalPoints.slice(0, targetPointCount));
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Octree implementation with batched lines
+        class OctNode {
+            constructor(x, y, z, size) {
+                this.x = x;
+                this.y = y;
+                this.z = z;
+                this.size = size;
+                this.points = [];
+                this.children = null;
+            }
+
+            subdivide() {
+                const s = this.size / 2;
+                const x = this.x;
+                const y = this.y;
+                const z = this.z;
+                this.children = [
+                    new OctNode(x, y, z, s),
+                    new OctNode(x + s, y, z, s),
+                    new OctNode(x, y + s, z, s),
+                    new OctNode(x + s, y + s, z, s),
+                    new OctNode(x, y, z + s, s),
+                    new OctNode(x + s, y, z + s, s),
+                    new OctNode(x, y + s, z + s, s),
+                    new OctNode(x + s, y + s, z + s, s)
+                ];
+            }
+        }
+
+        function buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ, maxPoints = 1000) {
+            const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+            const root = new OctNode(minX, minY, minZ, size);
+            const queue = [root];
+            let cubeX = [], cubeY = [], cubeZ = [];
+
+            for (const point of points) {
+                let node = root;
+                while (true) {
+                    node.points.push(point);
+                    if (node.children) {
+                        const childIndex = (point.x > node.x + node.size/2 ? 1 : 0) +
+                                          (point.y > node.y + node.size/2 ? 2 : 0) +
+                                          (point.z > node.z + node.size/2 ? 4 : 0);
+                        node = node.children[childIndex];
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            while (queue.length > 0) {
+                const node = queue.shift();
+                if (node.points.length > maxPoints && node.size > 0.1) {
+                    node.subdivide();
+                    for (const point of node.points) {
+                        const childIndex = (point.x > node.x + node.size/2 ? 1 : 0) +
+                                          (point.y > node.y + node.size/2 ? 2 : 0) +
+                                          (point.z > node.z + node.size/2 ? 4 : 0);
+                        node.children[childIndex].points.push(point);
+                    }
+                    node.points = [];
+                    queue.push(...node.children);
+                }
+                if (node.size > 2) {
+                    const x = node.x, y = node.y, z = node.z, s = node.size;
+                    cubeX.push(x, x+s, null, x, x+s, null, x, x, null, x+s, x+s, null,
+                              x, x+s, null, x, x+s, null, x, x, null, x+s, x+s, null,
+                              x, x, null, x+s, x+s, null, x, x, null, x+s, x+s, null);
+                    cubeY.push(y, y, null, y+s, y+s, null, y, y+s, null, y+s, y, null,
+                              y, y, null, y+s, y+s, null, y, y+s, null, y+s, y, null,
+                              y, y, null, y, y, null, y+s, y+s, null, y+s, y+s, null);
+                    cubeZ.push(z, z, null, z, z, null, z, z, null, z, z, null,
+                              z+s, z+s, null, z+s, z+s, null, z+s, z+s, null, z+s, z+s, null,
+                              z, z+s, null, z, z+s, null, z, z+s, null, z, z+s, null);
+                }
+            }
+
+            return {root, cubes: [{x: cubeX, y: cubeY, z: cubeZ}]};
+        }
+
+        // Dark mode colors
+        const darkBg = '#2c3436';
+        const darkPaper = '#1f2527';
+        const textColor = '#ffffff';
+        const gridColor = '#444';
+
+        // Global state
+        let points = datasets.cone;
+        let xValues = points.map(p => p.x);
+        let yValues = points.map(p => p.y);
+        let zValues = points.map(p => p.z);
+        let minX = Math.min(...xValues), maxX = Math.max(...xValues);
+        let minY = Math.min(...yValues), maxY = Math.max(...yValues);
+        let minZ = Math.min(...zValues), maxZ = Math.max(...zValues);
+        let octree = buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ);
+        let currentAxis = 'x';
+
+        // 3D scatter plot
+        const scatterTrace3d = {
+            x: xValues,
+            y: yValues,
+            z: zValues,
+            mode: 'markers',
+            type: 'scatter3d',
+            marker: {size: 2, color: '#66b3ff', opacity: 0.5}
+        };
+
+        const cubeTrace3d = {
+            x: octree.cubes[0].x,
+            y: octree.cubes[0].y,
+            z: octree.cubes[0].z,
+            mode: 'lines',
+            type: 'scatter3d',
+            line: {color: 'rgba(255, 99, 71, 0.4)', width: 2}
+        };
+
+        const layout3d = {
+            title: {text: '3D View', font: {color: textColor}},
+            scene: {
+                xaxis: {title: 'X', color: textColor, gridcolor: gridColor},
+                yaxis: {title: 'Y', color: textColor, gridcolor: gridColor},
+                zaxis: {title: 'Z', color: textColor, gridcolor: gridColor},
+                aspectmode: 'cube',
+                bgcolor: darkBg
+            },
+            showlegend: false,
+            margin: {l: 0, r: 0, t: 50, b: 0},
+            paper_bgcolor: darkPaper,
+            plot_bgcolor: darkBg
+        };
+
+        // Grid line functions (batched for 2D)
+        function getYZGridLines(cubes) {
+            let x = [], y = [];
+            cubes[0].x.forEach((val, i) => {
+                if (val !== null) {
+                    x.push(cubes[0].y[i]);
+                    y.push(cubes[0].z[i]);
+                } else {
+                    x.push(null);
+                    y.push(null);
+                }
+            });
+            return [{x, y}];
+        }
+
+        function getXZGridLines(cubes) {
+            let x = [], y = [];
+            cubes[0].x.forEach((val, i) => {
+                if (val !== null) {
+                    x.push(cubes[0].x[i]);
+                    y.push(cubes[0].z[i]);
+                } else {
+                    x.push(null);
+                    y.push(null);
+                }
+            });
+            return [{x, y}];
+        }
+
+        function getXYGridLines(cubes) {
+            let x = [], y = [];
+            cubes[0].x.forEach((val, i) => {
+                if (val !== null) {
+                    x.push(cubes[0].x[i]);
+                    y.push(cubes[0].y[i]);
+                } else {
+                    x.push(null);
+                    y.push(null);
+                }
+            });
+            return [{x, y}];
+        }
+
+        // 2D heatmap setup
+        const heatmapTrace2d = {
+            x: [],
+            y: [],
+            z: [],
+            type: 'heatmap',
+            colorscale: 'Viridis',
+            showscale: true,
+            colorbar: {title: 'Density', titleside: 'right', x: 1.05}
+        };
+
+        const gridTrace2d = {
+            x: [],
+            y: [],
+            mode: 'lines',
+            type: 'scatter',
+            line: {color: 'rgba(255, 99, 71, 0.4)', width: 2}
+        };
+
+        const layout2dBase = {
+            showlegend: false,
+            margin: {l: 50, r: 50, t: 50, b: 50},
+            paper_bgcolor: darkPaper,
+            plot_bgcolor: darkBg
+        };
+
+        // Initial plots
+        Plotly.newPlot('chart3d', [scatterTrace3d, cubeTrace3d], layout3d, {responsive: true});
+        Plotly.newPlot('chart2d', [heatmapTrace2d, gridTrace2d], layout2dBase, {responsive: true});
+        update2DPlot(null);
+
+        // Helper function to create heatmap data
+        function createHeatmapData(xData, yData, xRange, yRange) {
+            const binSize = 50;
+            const xStep = (xRange[1] - xRange[0]) / binSize;
+            const yStep = (yRange[1] - yRange[0]) / binSize;
+            const xBins = Array.from({length: binSize + 1}, (_, i) => xRange[0] + i * xStep);
+            const yBins = Array.from({length: binSize + 1}, (_, i) => yRange[0] + i * yStep);
+            const zData = Array(binSize).fill(0).map(() => Array(binSize).fill(0));
+
+            for (let i = 0; i < xData.length; i++) {
+                const x = xData[i];
+                const y = yData[i];
+                const xIdx = Math.min(Math.floor((x - xRange[0]) / xStep), binSize - 1);
+                const yIdx = Math.min(Math.floor((y - yRange[0]) / yStep), binSize - 1);
+                if (xIdx >= 0 && xIdx < binSize && yIdx >= 0 && yIdx < binSize) {
+                    zData[yIdx][xIdx] += 1;
+                }
+            }
+
+            return {
+                x: xBins,
+                y: yBins,
+                z: zData
+            };
+        }
+
+        // Update dataset
+        function updateDataset() {
+            const datasetValue = document.getElementById('dataset').value;
+            if (datasetValue === 'glb') {
+                document.getElementById('glb-upload').click();
+                return;
+            }
+            points = datasets[datasetValue];
+            xValues = points.map(p => p.x);
+            yValues = points.map(p => p.y);
+            zValues = points.map(p => p.z);
+            minX = Math.min(...xValues); maxX = Math.max(...xValues);
+            minY = Math.min(...yValues); maxY = Math.max(...yValues);
+            minZ = Math.min(...zValues); maxZ = Math.max(...zValues);
+            octree = buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ);
+
+            Plotly.restyle('chart3d', {
+                x: [xValues],
+                y: [yValues],
+                z: [zValues]
+            }, [0]);
+            Plotly.restyle('chart3d', {
+                x: [octree.cubes[0].x],
+                y: [octree.cubes[0].y],
+                z: [octree.cubes[0].z]
+            }, [1]);
+
+            updateSliderRange();
+        }
+
+        // Handle GLB file upload
+        document.getElementById('glb-upload').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                convertGLBToPointCloud(file, function(glbPoints) {
+                    datasets.glb = glbPoints;
+                    points = glbPoints;
+                    xValues = points.map(p => p.x);
+                    yValues = points.map(p => p.y);
+                    zValues = points.map(p => p.z);
+                    minX = Math.min(...xValues); maxX = Math.max(...xValues);
+                    minY = Math.min(...yValues); maxY = Math.max(...yValues);
+                    minZ = Math.min(...zValues); maxZ = Math.max(...zValues);
+                    octree = buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ);
+
+                    Plotly.restyle('chart3d', {
+                        x: [xValues],
+                        y: [yValues],
+                        z: [zValues]
+                    }, [0]);
+                    Plotly.restyle('chart3d', {
+                        x: [octree.cubes[0].x],
+                        y: [octree.cubes[0].y],
+                        z: [octree.cubes[0].z]
+                    }, [1]);
+
+                    updateSliderRange();
+                });
+            }
+        });
+
+        // Update 2D heatmap plot with thickness
+        function update2DPlot(value) {
+            const thicknessSlider = document.getElementById('thickness-slider');
+            const thicknessPercent = parseFloat(thicknessSlider.value);
+            let xData, yData, title, xTitle, yTitle, xRange, yRange, gridLines, axisRange;
+
+            if (currentAxis === 'x') {
+                gridLines = getYZGridLines(octree.cubes);
+                axisRange = maxX - minX;
+                const halfThickness = (thicknessPercent / 100) * axisRange / 2;
+                xData = value !== null ? points.filter(p => p.x >= value - halfThickness && p.x <= value + halfThickness).map(p => p.y) : [];
+                yData = value !== null ? points.filter(p => p.x >= value - halfThickness && p.x <= value + halfThickness).map(p => p.z) : [];
+                title = value !== null ? `Y-Z Cross-Section at X = ${value.toFixed(2)} (±${thicknessPercent.toFixed(1)}%)` : 'Y-Z Cross-Section';
+                xTitle = 'Y'; yTitle = 'Z';
+                xRange = [minY, maxY]; yRange = [minZ, maxZ];
+            } else if (currentAxis === 'y') {
+                gridLines = getXZGridLines(octree.cubes);
+                axisRange = maxY - minY;
+                const halfThickness = (thicknessPercent / 100) * axisRange / 2;
+                xData = value !== null ? points.filter(p => p.y >= value - halfThickness && p.y <= value + halfThickness).map(p => p.x) : [];
+                yData = value !== null ? points.filter(p => p.y >= value - halfThickness && p.y <= value + halfThickness).map(p => p.z) : [];
+                title = value !== null ? `X-Z Cross-Section at Y = ${value.toFixed(2)} (±${thicknessPercent.toFixed(1)}%)` : 'X-Z Cross-Section';
+                xTitle = 'X'; yTitle = 'Z';
+                xRange = [minX, maxX]; yRange = [minZ, maxZ];
+            } else { // z
+                gridLines = getXYGridLines(octree.cubes);
+                axisRange = maxZ - minZ;
+                const halfThickness = (thicknessPercent / 100) * axisRange / 2;
+                xData = value !== null ? points.filter(p => p.z >= value - halfThickness && p.z <= value + halfThickness).map(p => p.x) : [];
+                yData = value !== null ? points.filter(p => p.z >= value - halfThickness && p.z <= value + halfThickness).map(p => p.y) : [];
+                title = value !== null ? `X-Y Cross-Section at Z = ${value.toFixed(2)} (±${thicknessPercent.toFixed(1)}%)` : 'X-Y Cross-Section';
+                xTitle = 'X'; yTitle = 'Y';
+                xRange = [minX, maxX]; yRange = [minY, maxY];
+            }
+
+            const heatmapData = value !== null ? createHeatmapData(xData, yData, xRange, yRange) : {
+                x: [xRange[0], xRange[1]],
+                y: [yRange[0], yRange[1]],
+                z: [[0, 0], [0, 0]]
+            };
+
+            Plotly.restyle('chart2d', {
+                x: [heatmapData.x, gridLines[0].x],
+                y: [heatmapData.y, gridLines[0].y],
+                z: [heatmapData.z]
+            }, [0, 1]);
+            Plotly.relayout('chart2d', {
+                title: {text: title, font: {color: textColor}},
+                xaxis: {title: xTitle, range: xRange, color: textColor, gridcolor: gridColor},
+                yaxis: {title: yTitle, range: yRange, scaleanchor: 'x', scaleratio: 1, color: textColor, gridcolor: gridColor}
+            });
+        }
+
+        // Slider update
+        function updateSliderRange() {
+            const slider = document.getElementById('axis-slider');
+            const label = document.getElementById('slider-label');
+            if (currentAxis === 'x') {
+                slider.min = minX;
+                slider.max = maxX;
+                label.textContent = 'X Slice: ';
+            } else if (currentAxis === 'y') {
+                slider.min = minY;
+                slider.max = maxY;
+                label.textContent = 'Y Slice: ';
+            } else { // z
+                slider.min = minZ;
+                slider.max = maxZ;
+                label.textContent = 'Z Slice: ';
+            }
+            slider.value = (parseFloat(slider.min) + parseFloat(slider.max)) / 2;
+            update2DPlotFromSlider();
+        }
+
+        function update2DPlotFromSlider() {
+            const slider = document.getElementById('axis-slider');
+            const value = parseFloat(slider.value);
+            update2DPlot(value);
+        }
+
+        // Event listeners
+        function setupHoverEvents() {
+            const chart3d = document.getElementById('chart3d');
+            chart3d.on('plotly_hover', function(data) {
+                if (data && data.points && data.points.length > 0) {
+                    const point = data.points[0];
+                    const hoverValue = currentAxis === 'x' ? point.x : 
+                                     currentAxis === 'y' ? point.y : point.z;
+                    update2DPlot(hoverValue);
+                    document.getElementById('axis-slider').value = hoverValue;
+                }
+            });
+            chart3d.on('plotly_unhover', update2DPlotFromSlider);
+        }
+
+        document.querySelectorAll('input[name="axis"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                currentAxis = this.value;
+                updateSliderRange();
+            });
+        });
+
+        document.getElementById('dataset').addEventListener('change', updateDataset);
+
+        document.getElementById('axis-slider').addEventListener('input', update2DPlotFromSlider);
+        document.getElementById('thickness-slider').addEventListener('input', update2DPlotFromSlider);
+
+        // Initial setup
+        setupHoverEvents();
+        updateSliderRange();
+    </script>
+</body>
+</html>

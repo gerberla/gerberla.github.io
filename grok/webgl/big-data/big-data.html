@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Population Density Heatmap Pyramid</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: #1a1a1a;
+    }
+    #glCanvas {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glCanvas"></canvas>
+  <script>
+    // Canvas and WebGL setup
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+    if (!gl) {
+      alert('WebGL not supported!');
+      throw new Error('WebGL not supported');
+    }
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Shaders
+    const vertexShaderSource = `
+      attribute vec2 a_position;
+      attribute vec2 a_texCoord;
+      uniform mat4 u_mvp;
+      varying vec2 v_texCoord;
+      void main() {
+        gl_Position = u_mvp * vec4(a_position, 0.0, 1.0);
+        v_texCoord = a_texCoord;
+      }
+    `;
+
+    const fragmentShaderSource = `
+      precision mediump float;
+      varying vec2 v_texCoord;
+      uniform sampler2D u_texture;
+      void main() {
+        vec4 color = texture2D(u_texture, v_texCoord);
+        gl_FragColor = vec4(color.r, color.g * 0.5, color.b * 0.2, 1.0); // Heatmap coloring
+      }
+    `;
+
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program error:', gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    // Pyramid data (simulated population density)
+    function generateHeatmap(width, height) {
+      const data = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          // Simulate population density (higher in "urban" areas)
+          const lat = (y / height) * 180 - 90; // -90 to 90
+          const lon = (x / width) * 360 - 180; // -180 to 180
+          const density = Math.sin(lat * Math.PI / 180) * Math.cos(lon * Math.PI / 180) +
+                         Math.random() * 0.3; // Fake density pattern
+          data[i] = Math.min(255, density * 255);     // R (intensity)
+          data[i + 1] = 0;                            // G
+          data[i + 2] = 0;                            // B
+          data[i + 3] = 255;                          // A
+        }
+      }
+      return data;
+    }
+
+    const pyramid = {
+      low: { width: 1024, height: 512, data: generateHeatmap(1024, 512) },
+      mid: [
+        { width: 1024, height: 512, data: generateHeatmap(1024, 512), x: 0, y: 0 },
+        { width: 1024, height: 512, data: generateHeatmap(1024, 512), x: 1, y: 0 },
+        { width: 1024, height: 512, data: generateHeatmap(1024, 512), x: 0, y: 1 },
+        { width: 1024, height: 512, data: generateHeatmap(1024, 512), x: 1, y: 1 }
+      ],
+      high: Array(16).fill().map((_, i) => ({
+        width: 1024, height: 512,
+        data: generateHeatmap(1024, 512),
+        x: (i % 4) * 0.25,
+        y: Math.floor(i / 4) * 0.25
+      }))
+    };
+
+    // Create textures
+    function createTexture(data, width, height) {
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return texture;
+    }
+
+    pyramid.low.texture = createTexture(pyramid.low.data, pyramid.low.width, pyramid.low.height);
+    pyramid.mid.forEach(chunk => chunk.texture = createTexture(chunk.data, chunk.width, chunk.height));
+    pyramid.high.forEach(chunk => chunk.texture = createTexture(chunk.data, chunk.width, chunk.height));
+
+    // Buffers
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,  1, -1,  -1, 1,  1, 1 // Quad vertices
+    ]), gl.STATIC_DRAW);
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, 1,  1, 1,  0, 0,  1, 0 // Texture coords
+    ]), gl.STATIC_DRAW);
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+    const mvpLoc = gl.getUniformLocation(program, 'u_mvp');
+
+    // Interaction
+    let zoom = 1;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let lastX, lastY;
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+      const mouseX = (e.clientX / canvas.width) * 2 - 1;
+      const mouseY = (e.clientY / canvas.height) * -2 + 1;
+      const newZoom = Math.max(1, Math.min(16, zoom * zoomFactor));
+      panX += mouseX * (1/zoom - 1/newZoom);
+      panY += mouseY * (1/zoom - 1/newZoom);
+      zoom = newZoom;
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = (e.clientX - lastX) / canvas.width * 2 / zoom;
+        const dy = (e.clientY - lastY) / canvas.height * -2 / zoom;
+        panX -= dx;
+        panY -= dy;
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => isDragging = false);
+    canvas.addEventListener('mouseleave', () => isDragging = false);
+
+    // Matrix function
+    function ortho(left, right, bottom, top, near, far) {
+      const lr = 1 / (left - right);
+      const bt = 1 / (bottom - top);
+      const nf = 1 / (near - far);
+      return [
+        -2 * lr, 0, 0, 0,
+        0, -2 * bt, 0, 0,
+        0, 0, 2 * nf, 0,
+        (left + right) * lr, (bottom + top) * bt, (far + near) * nf, 1
+      ];
+    }
+
+    // Render
+    function render() {
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      const aspect = canvas.width / canvas.height;
+      const visibleWidth = 2 / zoom;
+      const visibleHeight = visibleWidth / aspect;
+      const mvp = ortho(
+        panX - visibleWidth/2, panX + visibleWidth/2,
+        panY - visibleHeight/2, panY + visibleHeight/2,
+        -1, 1
+      );
+
+      gl.uniformMatrix4fv(mvpLoc, false, mvp);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(positionLoc);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+      gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(texCoordLoc);
+
+      // Select resolution based on zoom
+      let level = pyramid.low;
+      if (zoom > 4) level = pyramid.high;
+      else if (zoom > 2) level = pyramid.mid;
+
+      if (Array.isArray(level)) {
+        level.forEach(chunk => {
+          const chunkLeft = chunk.x;
+          const chunkRight = chunk.x + 0.25;
+          const chunkBottom = chunk.y;
+          const chunkTop = chunk.y + 0.25;
+          if (chunkRight > panX - visibleWidth/2 && chunkLeft < panX + visibleWidth/2 &&
+              chunkTop > panY - visibleHeight/2 && chunkBottom < panY + visibleHeight/2) {
+            gl.bindTexture(gl.TEXTURE_2D, chunk.texture);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          }
+        });
+      } else {
+        gl.bindTexture(gl.TEXTURE_2D, level.texture);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title></title>
+    <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+</head>
+<body>
+  <div id="graph"></div>  
+  <div>
+    <label>Thresh:</label><input type = "range" min="0" max="1000" value="0" step="1" id="threshSlider"/>
+    <label id="thresh"></label>
+  </div>
+
+  <div>
+    <label>Frequency:</label><input type = "range" min="0" max="1" value="0" step="1" id="frequencySlider"/>
+    <label id="frequency"></label>
+  </div>
+
+  <div>
+    <label>Amplitude:</label><input type = "range" min="0" max="1" value="0" step="1" id="amplitudeSlider"/>
+    <label id="amplitude"></label>
+  </div>
+
+  <div>
+    <label>Noise Intensity:</label><input type = "range" min="0" max="1" value="0" step="1" id="noiseSlider"/>
+    <label id="noise"></label>
+  </div>
+
+  <div>
+    <label>Detection Intensity:</label><input type = "range" min="0" max="1" value="0" step="1" id="detectionSlider"/>
+    <label id="detection"></label>
+  </div>
+
+  <div>
+    <label>Detection Width:</label><input type = "range" min="0" max="1" value="0" step="1" id="widthSlider"/>
+    <label id="width"></label>
+  </div>
+ 
+  <script> 
+  // Plot ///////////////////////////////////////////
+  var windowSize = 999;
+  var signalFrequency = 10;
+  var binWidth = 256;
+
+  var brightness = 0;
+  var increment = false;
+
+  var threshMax = 5;
+  var thresh = 0;
+
+
+  // Initial static plot
+  var initialArr = new Array(windowSize).fill(0);
+  initialArr[0] = 1;
+
+  // Updating the plot
+  var dataMatrix = []; // 
+  // Initializing the dataMatrix with zeros based on the window size. 
+  // This shows the black part of the graph when the data starts to appear.
+  for(var i = 0; i < windowSize - 1; i++) {
+    dataMatrix.push(Array(binWidth).fill(0));
+  }
+
+  
+  // slider
+  sliderSteps = 100
+  step = 5;
+  stepArr = []
+  for(i = 0; i < sliderSteps; i++)
+  {
+    stepArr.push({
+        value: ((5/sliderSteps)*i)
+    });
+  }
+  console.log(stepArr);
+
+
+  var dataPlot = [
+            {
+              //x: [1,2],
+              z: [dataMatrix],
+              showscale: true,
+              colorscale: 'Hot',
+              type: 'heatmap',
+              zsmooth: 'fast'
+            }
+          ];
+
+    var layout = {
+      autosize: true,
+      width: 900,
+      height: 600,
+      margin: {
+        l: 50,
+        r: 50,
+        b: 50,
+        t: 25,
+        pad: 4
+      },
+      paper_bgcolor: '#7f7f7f',
+      plot_bgcolor: '#c7c7c7'
+    };
+
+  Plotly.newPlot('graph', dataPlot, layout);
+
+
+  function ran(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+  }
+
+  // @ToDo: Remove the interval and keep updating the singleFftArray with actual sensor data bins
+  // Start a signal frequency
+  sinMin = -2 * Math.PI
+  sinMax = 2 * Math.PI;
+  var frequency = 1; // Change this
+  
+  var binCenter = binWidth / 2;
+
+  // Scale sine wave
+  var percentOfBinWidth = .3; // 0.0 - 1.0
+
+  // Intensity
+  var noiseIntensity = 3;
+  var detectionIntensity = 5;
+
+  // Detection Width
+  var detectionWidthPercentage = .05;
+
+
+  // Start sine wave at
+  var x = sinMin;
+
+  var interval = setInterval(function() {
+    // CALCULATED
+    var sinStep = frequency * (sinMax - sinMin)/windowSize;
+    var sinCrestHeightFromBinCenter = Math.floor((binWidth/2) * percentOfBinWidth);
+    var detectionWidth = Math.floor(binWidth * detectionWidthPercentage);
+
+    // VARS
+    // noise 
+    // subject
+
+
+
+
+    var singleFftArray = []; // binWidth 
+    //console.log(x)
+    var y = Math.floor(Math.sin(x) * sinCrestHeightFromBinCenter)+ binCenter;
+    
+    x += sinStep;
+    x = (x > sinMax || x < sinMin) ? sinMin : x;
+
+    for(var i = 0; i < binWidth; i++) 
+    {
+      //noise
+      singleFftArray[i] = Math.random() * noiseIntensity ;//Math.sin(Math.round(i+Math.random(3)));
+      //singleFftArray[i] = Math.round(Math.random()*100);
+    }
+
+    singleFftArray[y] = singleFftArray[y] + detectionIntensity * 1.0;
+
+    for(var i = 1; i < detectionWidth; i++)
+    {
+        yPlus = y + i;
+        yMinus = y - i;
+        
+        factor = (detectionWidth - i) / (detectionWidth);
+        intensity = detectionIntensity * factor;
+
+        if (yPlus < singleFftArray.length)
+        {
+            singleFftArray[yPlus] = singleFftArray[yPlus] + intensity;
+        }
+
+        if (yMinus >= 0)
+        {
+            singleFftArray[yMinus] = singleFftArray[yMinus] + intensity;
+        }
+    }
+
+    //
+    // For a fixed window size,
+    // Push the latest data and remove the first element
+    if(dataMatrix.length > windowSize) {
+      dataMatrix.push(singleFftArray)
+      dataMatrix.splice(0, 1)
+    } else {
+      dataMatrix.push(singleFftArray);
+    }
+    
+    var dataUpdate = {
+      z: [transpose(filter(dataMatrix))]
+    };
+    Plotly.update('graph', dataUpdate)
+  }, signalFrequency); 
+
+  function filter(m) {
+    var matrix = []; 
+    for(var i = 0; i < windowSize - 1; i++) {
+        matrix.push(new Array(binWidth).fill(0));
+    }
+
+    //console.log("LENGTH", matrix.length);
+    for(var i=0; i < matrix.length; i++)
+    {  
+      for(var j=0; j< matrix[i].length; j++)
+      {
+        v = m[i][j]; 
+        matrix[i][j] = v < thresh ? 0 : v;
+      }
+    }
+    return matrix;
+  }
+  // Function to transpose a two dimensional matrix
+  function transpose(a) {
+      return Object.keys(a[0]).map(function(c) {
+          return a.map(function(r) { return r[c]; });
+      });
+   }
+
+   function sliderInput(el, min, max, steps, value){
+        var slider = document.getElementById(el);
+
+        slider.setAttribute("min", min);
+        slider.setAttribute("max", max);
+        slider.setAttribute("step", max/steps);
+        slider.setAttribute("value", value);
+
+        return slider;
+    }
+
+    // Sliders
+    sliderInput("threshSlider", 0, threshMax, 100, thresh)
+        .addEventListener("input", function(){
+                thresh = this.value;
+                document.getElementById("thresh").innerHTML = this.value;
+        }, false);
+
+    sliderInput("frequencySlider", 0, 10, 20, frequency)
+        .addEventListener("input", function(){
+                frequency = this.value;
+                document.getElementById("frequency").innerHTML = this.value;
+        }, false);
+
+    sliderInput("amplitudeSlider", 0, 1, 100, percentOfBinWidth)
+        .addEventListener("input", function(){
+                percentOfBinWidth = this.value;
+                document.getElementById("amplitude").innerHTML = Math.floor(this.value * 100) + '%';
+        }, false);
+
+    sliderInput("noiseSlider", 0, 10, 100, noiseIntensity)
+        .addEventListener("input", function(){
+                noiseIntensity = this.value;
+                document.getElementById("noise").innerHTML = this.value;
+        }, false);
+    
+    sliderInput("detectionSlider", 0, 10, 100, detectionIntensity)
+        .addEventListener("input", function(){
+                detectionIntensity = this.value;
+                document.getElementById("detection").innerHTML = this.value;
+        }, false);
+
+    sliderInput("widthSlider", 0, .5, 100, detectionWidthPercentage)
+        .addEventListener("input", function(){
+                detectionWidthPercentage = this.value;
+                document.getElementById("width").innerHTML = Math.floor(this.value * 100) + '%';
+        }, false);
+
+
+  </script>
+
+</body>
+</html>

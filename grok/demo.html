@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plotly.js 3D Octree Demos</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            background-color: #1f2527;
+            color: #ffffff;
+        }
+        .sidebar {
+            width: 250px;
+            background-color: #2c3436;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #444;
+        }
+        .sidebar h2 {
+            margin: 0 0 20px;
+            font-size: 1.5em;
+        }
+        .menu-item {
+            margin: 10px 0;
+        }
+        .menu-item button {
+            background: none;
+            border: none;
+            color: #ffffff;
+            font-size: 1em;
+            cursor: pointer;
+            padding: 5px 10px;
+            width: 100%;
+            text-align: left;
+            transition: background-color 0.2s;
+        }
+        .menu-item button:hover {
+            background-color: #3a4446;
+        }
+        .menu-item button.active {
+            background-color: #66b3ff;
+            color: #1f2527;
+        }
+        .submenu {
+            margin-left: 20px;
+            display: none;
+        }
+        .submenu.visible {
+            display: block;
+        }
+        .content {
+            flex: 1;
+            padding: 20px;
+            background-color: #1f2527;
+            display: flex;
+            flex-direction: column;
+        }
+        .content h1 {
+            margin: 0 0 20px;
+            font-size: 1.8em;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background-color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>Demos</h2>
+        <div id="menu"></div>
+    </div>
+    <div class="content">
+        <h1 id="demo-title">Select a Demo</h1>
+        <iframe id="demo-frame" src=""></iframe>
+    </div>
+
+    <script>
+        // Demo configurations with relative paths and folder structure
+        const demos = [
+            { path: 'original.html', name: 'Original 3D Octree', folder: 'Prototypes/Base' },
+            { path: 'optimized.html', name: 'Optimized 3D Octree', folder: 'Prototypes/Base' },
+            { path: 'glb-upload.html', name: 'GLB Upload', folder: 'Prototypes/Features' },
+            { path: 'realtime-slider.html', name: 'Realtime Slider', folder: 'Prototypes/Features' },
+            { path: 'interpolated-glb.html', name: 'Interpolated GLB', folder: 'Prototypes/Features' },
+            { path: 'heatmap.html', name: 'Heatmap Cross-Section', folder: 'Prototypes/Visuals' },
+            { path: 'thickness-slider.html', name: 'Thickness Slider', folder: 'Prototypes/Visuals' },
+            { path: 'fft/grok_fft_6.html', name: 'FFT', folder: 'fft' }
+        ];
+
+        // Organize demos by folder
+        const folders = {};
+        demos.forEach(demo => {
+            const folder = demo.folder || 'Uncategorized';
+            if (!folders[folder]) folders[folder] = [];
+            folders[folder].push(demo);
+        });
+
+        // Generate menu
+        const menu = document.getElementById('menu');
+        Object.keys(folders).forEach(folder => {
+            const folderDiv = document.createElement('div');
+            folderDiv.className = 'menu-item';
+
+            const folderButton = document.createElement('button');
+            folderButton.textContent = folder.split('/').pop();
+            folderButton.addEventListener('click', () => {
+                const submenu = folderDiv.querySelector('.submenu');
+                submenu.classList.toggle('visible');
+            });
+            folderDiv.appendChild(folderButton);
+
+            const submenu = document.createElement('div');
+            submenu.className = 'submenu';
+            folders[folder].forEach(demo => {
+                const demoButton = document.createElement('button');
+                demoButton.textContent = demo.name;
+                demoButton.addEventListener('click', () => {
+                    loadDemo(demo.path, demo.name);
+                    updateActiveButton(demoButton);
+                });
+                submenu.appendChild(demoButton);
+            });
+            folderDiv.appendChild(submenu);
+
+            menu.appendChild(folderDiv);
+        });
+
+        // Load demo into iframe
+        function loadDemo(path, name) {
+            const iframe = document.getElementById('demo-frame');
+            iframe.src = path;
+            document.getElementById('demo-title').textContent = name;
+        }
+
+        // Update active button state
+        function updateActiveButton(selectedButton) {
+            document.querySelectorAll('.menu-item button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            selectedButton.classList.add('active');
+        }
+
+        // Load the first demo by default
+        if (demos.length > 0) {
+            loadDemo(demos[0].path, demos[0].name);
+            updateActiveButton(menu.querySelector('.submenu button'));
+            menu.querySelector('.submenu').classList.add('visible'); // Open first folder
+        }
+    </script>
+</body>
+</html>

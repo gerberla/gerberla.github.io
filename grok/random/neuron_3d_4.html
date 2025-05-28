@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Cyclic Neurons with ReLU</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div id="plot" style="width: 100%; height: 100vh;"></div>
+    <button onclick="toggleView()">Toggle Orthographic View</button>
+
+    <script>
+        // First neuron data
+        let x1 = [];
+        let y1 = [];
+        let z1 = [];
+        for (let i = -5; i <= 5; i += 0.5) {
+            x1.push(i);
+            y1.push([]);
+            z1.push([]);
+            for (let j = 0.5; j <= 2; j += 0.1) {
+                y1[x1.length - 1].push(j);
+                let weightedSum = i * j;
+                z1[x1.length - 1].push(Math.max(0, weightedSum));
+            }
+        }
+
+        // Second neuron data (feeds from Neuron 1)
+        let x2 = [];
+        let y2 = [];
+        let z2 = [];
+        for (let i = 0; i < z1.length; i++) {
+            x2.push(x1[i]);
+            y2.push([]);
+            z2.push([]);
+            for (let j = 0.5; j <= 2; j += 0.1) {
+                y2[x2.length - 1].push(j + 3);
+                let prevOutput = z1[i][Math.floor((j - 0.5) / 0.1)];
+                let weightedSum = prevOutput * j;
+                z2[x2.length - 1].push(Math.max(0, weightedSum));
+            }
+        }
+
+        // Cyclic feedback: Neuron 2 output back to Neuron 1 input
+        let feedbackX = [];
+        let feedbackY = [];
+        let feedbackZ = [];
+        for (let i = 0; i < x2.length; i += 5) { // Sample points for clarity
+            let midJ = Math.floor(y2[i].length / 2);
+            feedbackX.push(x2[i]);           // Start at Neuron 2’s input
+            feedbackY.push(y2[i][midJ]);     // Neuron 2’s weight
+            feedbackZ.push(z2[i][midJ]);     // Neuron 2’s output
+            feedbackX.push(x1[i]);           // Back to Neuron 1’s input
+            feedbackY.push(y1[i][midJ] - 1); // Offset slightly below Neuron 1
+            feedbackZ.push(z2[i][midJ]);     // Same output value
+        }
+
+        // Data for Plotly
+        let data = [
+            {
+                x: x1,
+                y: y1[0],
+                z: z1,
+                type: 'surface',
+                colorscale: 'Viridis',
+                name: 'Neuron 1'
+            },
+            {
+                x: x2,
+                y: y2[0],
+                z: z2,
+                type: 'surface',
+                colorscale: 'Plasma',
+                name: 'Neuron 2'
+            },
+            {
+                x: feedbackX,
+                y: feedbackY,
+                z: feedbackZ,
+                type: 'scatter3d',
+                mode: 'lines',
+                line: { color: 'red', width: 3 },
+                name: 'Feedback Loop'
+            }
+        ];
+
+        // Layout
+        let layout = {
+            title: 'Two Neurons with Cyclic Feedback',
+            scene: {
+                xaxis: { title: 'Input (x)' },
+                yaxis: { title: 'Weight (w) / Layer Offset' },
+                zaxis: { title: 'Output' },
+                camera: { projection: { type: 'perspective' } }
+            },
+            autosize: true,
+            margin: { l: 50, r: 50, b: 50, t: 50 }
+        };
+
+        // Render
+        Plotly.newPlot('plot', data, layout);
+
+        // Toggle view
+        let isOrthographic = false;
+        function toggleView() {
+            isOrthographic = !isOrthographic;
+            let projectionType = isOrthographic ? 'orthographic' : 'perspective';
+            Plotly.relayout('plot', {
+                'scene.camera.projection.type': projectionType
+            });
+        }
+    </script>
+</body>
+</html>

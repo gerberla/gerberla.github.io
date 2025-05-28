@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plotly.js 3D Octree with Cross-Section</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div id="chart3d" style="width: 800px; height: 600px;"></div>
+    <div id="chart2d" style="width: 800px; height: 300px;"></div>
+
+    <script>
+        // Generate 10,000 points in concentric spherical shells
+        function generateSphereData() {
+            const points = [];
+            const numPoints = 10000;
+            const shells = 20;
+            const pointsPerShell = numPoints / shells;
+
+            for (let r = 1; r <= shells; r++) {
+                const radius = r * 0.5;
+                for (let i = 0; i < pointsPerShell; i++) {
+                    const theta = Math.random() * 2 * Math.PI;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    const sineMod = Math.sin(theta * 4 + phi * 4) * 0.2;
+                    const rMod = radius + sineMod;
+                    const x = rMod * Math.sin(phi) * Math.cos(theta);
+                    const y = rMod * Math.sin(phi) * Math.sin(theta);
+                    const z = rMod * Math.cos(phi);
+                    points.push({x, y, z});
+                }
+            }
+            return points;
+        }
+
+        // Octree implementation
+        class OctNode {
+            constructor(x, y, z, size) {
+                this.x = x;
+                this.y = y;
+                this.z = z;
+                this.size = size;
+                this.points = [];
+                this.children = null;
+            }
+
+            subdivide() {
+                const s = this.size / 2;
+                const x = this.x;
+                const y = this.y;
+                const z = this.z;
+                this.children = [
+                    new OctNode(x, y, z, s),
+                    new OctNode(x + s, y, z, s),
+                    new OctNode(x, y + s, z, s),
+                    new OctNode(x + s, y + s, z, s),
+                    new OctNode(x, y, z + s, s),
+                    new OctNode(x + s, y, z + s, s),
+                    new OctNode(x, y + s, z + s, s),
+                    new OctNode(x + s, y + s, z + s, s)
+                ];
+            }
+        }
+
+        function buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ, maxPoints = 500) {
+            const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+            const root = new OctNode(minX, minY, minZ, size);
+            const queue = [root];
+            let allCubes = [];
+
+            for (const point of points) {
+                let node = root;
+                while (true) {
+                    node.points.push(point);
+                    if (node.children) {
+                        const childIndex = (point.x > node.x + node.size/2 ? 1 : 0) +
+                                        (point.y > node.y + node.size/2 ? 2 : 0) +
+                                        (point.z > node.z + node.size/2 ? 4 : 0);
+                        node = node.children[childIndex];
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            while (queue.length > 0) {
+                const node = queue.shift();
+                if (node.points.length > maxPoints && node.size > 0.1) {
+                    node.subdivide();
+                    for (const point of node.points) {
+                        const childIndex = (point.x > node.x + node.size/2 ? 1 : 0) +
+                                        (point.y > node.y + node.size/2 ? 2 : 0) +
+                                        (point.z > node.z + node.size/2 ? 4 : 0);
+                        node.children[childIndex].points.push(point);
+                    }
+                    node.points = [];
+                    queue.push(...node.children);
+                }
+                const x = node.x, y = node.y, z = node.z, s = node.size;
+                allCubes.push(
+                    {x: [x,x+s], y: [y,y], z: [z,z]},
+                    {x: [x,x+s], y: [y+s,y+s], z: [z,z]},
+                    {x: [x,x], y: [y,y+s], z: [z,z]},
+                    {x: [x+s,x+s], y: [y,y+s], z: [z,z]},
+                    {x: [x,x+s], y: [y,y], z: [z+s,z+s]},
+                    {x: [x,x+s], y: [y+s,y+s], z: [z+s,z+s]},
+                    {x: [x,x], y: [y,y+s], z: [z+s,z+s]},
+                    {x: [x+s,x+s], y: [y,y+s], z: [z+s,z+s]},
+                    {x: [x,x], y: [y,y], z: [z,z+s]},
+                    {x: [x+s,x+s], y: [y,y], z: [z,z+s]},
+                    {x: [x,x], y: [y+s,y+s], z: [z,z+s]},
+                    {x: [x+s,x+s], y: [y+s,y+s], z: [z,z+s]}
+                );
+            }
+
+            return {root, cubes: allCubes};
+        }
+
+        // Generate data
+        const points = generateSphereData();
+        const xValues = points.map(p => p.x);
+        const yValues = points.map(p => p.y);
+        const zValues = points.map(p => p.z);
+        const minX = Math.min(...xValues), maxX = Math.max(...xValues);
+        const minY = Math.min(...yValues), maxY = Math.max(...yValues);
+        const minZ = Math.min(...zValues), maxZ = Math.max(...zValues);
+        const octree = buildOctree(points, minX, maxX, minY, maxY, minZ, maxZ);
+
+        // 3D scatter plot
+        const scatterTrace3d = {
+            x: xValues,
+            y: yValues,
+            z: zValues,
+            mode: 'markers',
+            type: 'scatter3d',
+            marker: {size: 2, color: '#1f77b4', opacity: 0.5}
+        };
+
+        const cubeTraces = octree.cubes.map(cube => ({
+            x: cube.x,
+            y: cube.y,
+            z: cube.z,
+            mode: 'lines',
+            type: 'scatter3d',
+            line: {color: 'rgba(255, 0, 0, 0.3)', width: 2}
+        }));
+
+        const layout3d = {
+            title: '3D Concentric Shells with Octree Bucketing',
+            scene: {
+                xaxis: {title: 'X'},
+                yaxis: {title: 'Y'},
+                zaxis: {title: 'Z'},
+                aspectmode: 'cube'
+            },
+            showlegend: false,
+            margin: {l: 0, r: 0, t: 50, b: 0}
+        };
+
+        // Initial 2D cross-section (empty)
+        const scatterTrace2d = {
+            x: [],
+            y: [],
+            mode: 'markers',
+            type: 'scatter',
+            marker: {size: 4, color: '#1f77b4'}
+        };
+
+        const layout2d = {
+            title: 'Y-Z Cross-Section at X = N/A',
+            xaxis: {title: 'Y', range: [minY, maxY]},
+            yaxis: {title: 'Z', range: [minZ, maxZ], scaleanchor: "x", scaleratio: 1},
+            showlegend: false,
+            margin: {l: 50, r: 50, t: 50, b: 50}
+        };
+
+        // Create plots
+        Plotly.newPlot('chart3d', [scatterTrace3d, ...cubeTraces], layout3d, {responsive: true});
+        Plotly.newPlot('chart2d', [scatterTrace2d], layout2d, {responsive: true});
+
+        // Hover handler for cross-section
+        document.getElementById('chart3d').on('plotly_hover', function(data) {
+            const xHover = data.points[0].x;
+            const tolerance = 0.1; // Width of cross-section slice
+            
+            // Filter points within xHover ± tolerance
+            const crossPoints = points.filter(p => 
+                p.x >= xHover - tolerance && p.x <= xHover + tolerance
+            );
+            
+            const crossY = crossPoints.map(p => p.y);
+            const crossZ = crossPoints.map(p => p.z);
+
+            // Update 2D plot
+            Plotly.update('chart2d', {
+                x: [crossY],
+                y: [crossZ]
+            }, {
+                title: `Y-Z Cross-Section at X = ${xHover.toFixed(2)}`
+            });
+        });
+
+        // Clear 2D plot when not hovering
+        document.getElementById('chart3d').on('plotly_unhover', function() {
+            Plotly.update('chart2d', {
+                x: [[]],
+                y: [[]]
+            }, {
+                title: 'Y-Z Cross-Section at X = N/A'
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Fractal Explorer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        #menu {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+        }
+        #menu-button {
+            background: #333;
+            color: #ddd;
+            border: 1px solid #555;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            border-radius: 4px;
+        }
+        #menu-button:hover {
+            background: #444;
+        }
+        #dropdown {
+            display: none;
+            position: absolute;
+            top: 40px;
+            left: 0;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 10px;
+            color: #ddd;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+        }
+        #dropdown label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #bbb;
+        }
+        #dropdown select {
+            width: 100%;
+            padding: 5px;
+            background: #222;
+            color: #ddd;
+            border: 1px solid #444;
+            border-radius: 2px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <button id="menu-button">Fractal Settings</button>
+        <div id="dropdown">
+            <label for="fractalSelect">Fractal Type:</label>
+            <select id="fractalSelect">
+                <option value="mandelbrot">Mandelbrot Set</option>
+                <option value="julia">Julia Set</option>
+                <option value="burningShip">Burning Ship</option>
+            </select>
+        </div>
+    </div>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const gl = canvas.getContext('webgl');
+        const menuButton = document.getElementById('menu-button');
+        const dropdown = document.getElementById('dropdown');
+        const fractalSelect = document.getElementById('fractalSelect');
+
+        if (!gl) {
+            alert('WebGL not supported!');
+        }
+
+        // Set canvas to full screen
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            render();
+        });
+
+        // Vertex Shader
+        const vsSource = `
+            attribute vec2 a_position;
+            void main() {
+                gl_Position = vec4(a_position, 0.0, 1.0);
+            }
+        `;
+
+        // Fragment Shader Templates
+        const fractalShaders = {
+            mandelbrot: `
+                precision highp float;
+                uniform vec2 u_resolution;
+                uniform vec2 u_zoomCenter;
+                uniform float u_zoomScale;
+
+                vec3 palette(float t) {
+                    vec3 a = vec3(0.5, 0.5, 0.5);
+                    vec3 b = vec3(0.5, 0.5, 0.5);
+                    vec3 c = vec3(1.0, 1.0, 1.0);
+                    vec3 d = vec3(0.263, 0.416, 0.557);
+                    return a + b * cos(6.28318 * (c * t + d));
+                }
+
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / u_resolution;
+                    float aspect = u_resolution.x / u_resolution.y;
+                    vec2 scaledUV = uv * vec2(aspect, 1.0) - vec2(aspect * 0.5, 0.5);
+                    vec2 c = u_zoomCenter + scaledUV * u_zoomScale * 2.0;
+                    vec2 z = vec2(0.0);
+                    float i = 0.0;
+                    float maxIter = 100.0;
+                    for (int iter = 0; iter < 100; iter++) {
+                        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+                        if (length(z) > 2.0) {
+                            i = float(iter);
+                            break;
+                        }
+                        i = float(iter) + 1.0;
+                    }
+                    float t = i / maxIter;
+                    vec3 color = (i >= maxIter) ? vec3(0.0) : palette(t);
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `,
+            julia: `
+                precision highp float;
+                uniform vec2 u_resolution;
+                uniform vec2 u_zoomCenter;
+                uniform float u_zoomScale;
+
+                vec3 palette(float t) {
+                    vec3 a = vec3(0.5, 0.5, 0.5);
+                    vec3 b = vec3(0.5, 0.5, 0.5);
+                    vec3 c = vec3(1.0, 1.0, 1.0);
+                    vec3 d = vec3(0.263, 0.416, 0.557);
+                    return a + b * cos(6.28318 * (c * t + d));
+                }
+
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / u_resolution;
+                    float aspect = u_resolution.x / u_resolution.y;
+                    vec2 scaledUV = uv * vec2(aspect, 1.0) - vec2(aspect * 0.5, 0.5);
+                    vec2 z = u_zoomCenter + scaledUV * u_zoomScale * 2.0;
+                    vec2 c = vec2(-0.8, 0.156);
+                    float i = 0.0;
+                    float maxIter = 100.0;
+                    for (int iter = 0; iter < 100; iter++) {
+                        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+                        if (length(z) > 2.0) {
+                            i = float(iter);
+                            break;
+                        }
+                        i = float(iter) + 1.0;
+                    }
+                    float t = i / maxIter;
+                    vec3 color = (i >= maxIter) ? vec3(0.0) : palette(t);
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `,
+            burningShip: `
+                precision highp float;
+                uniform vec2 u_resolution;
+                uniform vec2 u_zoomCenter;
+                uniform float u_zoomScale;
+
+                vec3 palette(float t) {
+                    vec3 a = vec3(0.5, 0.5, 0.5);
+                    vec3 b = vec3(0.5, 0.5, 0.5);
+                    vec3 c = vec3(1.0, 1.0, 1.0);
+                    vec3 d = vec3(0.263, 0.416, 0.557);
+                    return a + b * cos(6.28318 * (c * t + d));
+                }
+
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / u_resolution;
+                    float aspect = u_resolution.x / u_resolution.y;
+                    vec2 scaledUV = uv * vec2(aspect, 1.0) - vec2(aspect * 0.5, 0.5);
+                    vec2 c = u_zoomCenter + scaledUV * u_zoomScale * 2.0;
+                    vec2 z = vec2(0.0);
+                    float i = 0.0;
+                    float maxIter = 100.0;
+                    for (int iter = 0; iter < 100; iter++) {
+                        z = vec2(abs(z.x), abs(z.y));
+                        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+                        if (length(z) > 2.0) {
+                            i = float(iter);
+                            break;
+                        }
+                        i = float(iter) + 1.0;
+                    }
+                    float t = i / maxIter;
+                    vec3 color = (i >= maxIter) ? vec3(0.0) : palette(t);
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `
+        };
+
+        // Compile Shader
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        let currentProgram = null;
+        let vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+
+        function setFractal(fractalType) {
+            if (currentProgram) {
+                gl.deleteProgram(currentProgram);
+            }
+            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fractalShaders[fractalType]);
+            if (!fragmentShader) {
+                throw new Error('Fragment shader creation failed');
+            }
+            currentProgram = gl.createProgram();
+            gl.attachShader(currentProgram, vertexShader);
+            gl.attachShader(currentProgram, fragmentShader);
+            gl.linkProgram(currentProgram);
+            if (!gl.getProgramParameter(currentProgram, gl.LINK_STATUS)) {
+                console.error('Program link error:', gl.getProgramInfoLog(currentProgram));
+                throw new Error('Program linking failed');
+            }
+            gl.useProgram(currentProgram);
+            setupAttributesAndUniforms();
+            render();
+        }
+
+        function setupAttributesAndUniforms() {
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+            const positionLocation = gl.getAttribLocation(currentProgram, 'a_position');
+            gl.enableVertexAttribArray(positionLocation);
+            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+            resolutionLocation = gl.getUniformLocation(currentProgram, 'u_resolution');
+            zoomCenterLocation = gl.getUniformLocation(currentProgram, 'u_zoomCenter');
+            zoomScaleLocation = gl.getUniformLocation(currentProgram, 'u_zoomScale');
+        }
+
+        let resolutionLocation, zoomCenterLocation, zoomScaleLocation;
+        let zoomCenter = [-0.5, 0.0];
+        let zoomScale = 1.0;
+
+        // Mouse interaction
+        let isDragging = false;
+        let lastX, lastY;
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = (e.clientX - lastX) * zoomScale * 2 / canvas.width;
+                const dy = (lastY - e.clientY) * zoomScale * 2 / canvas.height;
+                zoomCenter[0] -= dx;
+                zoomCenter[1] -= dy;
+                lastX = e.clientX;
+                lastY = e.clientY;
+                render();
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+            zoomScale *= zoomFactor;
+            render();
+        });
+
+        // Menu toggle
+        menuButton.addEventListener('click', () => {
+            dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+
+        fractalSelect.addEventListener('change', (e) => {
+            setFractal(e.target.value);
+            zoomCenter = (e.target.value === 'julia') ? [0.0, 0.0] : [-0.5, 0.0];
+            zoomScale = 1.0;
+            render();
+        });
+
+        function render() {
+            gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+            gl.uniform2f(zoomCenterLocation, zoomCenter[0], zoomCenter[1]);
+            gl.uniform1f(zoomScaleLocation, zoomScale);
+
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
+        // Initial setup
+        setFractal('mandelbrot');
+    </script>
+</body>
+</html>

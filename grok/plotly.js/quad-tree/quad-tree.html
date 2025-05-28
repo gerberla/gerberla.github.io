@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plotly.js Quadtree Grid</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div id="chart" style="width: 800px; height: 800px;"></div>
+
+    <script>
+        // Generate 10,000 points in concentric rings with sine wave spacing
+        function generateRingData() {
+            const points = [];
+            const numPoints = 10000;
+            const rings = 20;
+            const pointsPerRing = numPoints / rings;
+
+            for (let r = 1; r <= rings; r++) {
+                const radius = r * 0.5;
+                for (let i = 0; i < pointsPerRing; i++) {
+                    const theta = (i / pointsPerRing) * 2 * Math.PI;
+                    const sineMod = Math.sin(theta * 4) * 0.2; // 4 waves per circle
+                    const x = (radius + sineMod) * Math.cos(theta);
+                    const y = (radius + sineMod) * Math.sin(theta);
+                    points.push({x, y});
+                }
+            }
+            return points;
+        }
+
+        // Simple Quadtree implementation
+        class QuadNode {
+            constructor(x, y, width, height) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.points = [];
+                this.children = null;
+            }
+
+            subdivide() {
+                const w = this.width / 2;
+                const h = this.height / 2;
+                this.children = [
+                    new QuadNode(this.x, this.y, w, h),
+                    new QuadNode(this.x + w, this.y, w, h),
+                    new QuadNode(this.x, this.y + h, w, h),
+                    new QuadNode(this.x + w, this.y + h, w, h)
+                ];
+            }
+        }
+
+        function buildQuadtree(points, minX, maxX, minY, maxY, maxPoints = 100) {
+            const root = new QuadNode(minX, minY, maxX - minX, maxY - minY);
+            const queue = [root];
+            let allSquares = [];
+
+            // Insert all points
+            for (const point of points) {
+                let node = root;
+                while (true) {
+                    node.points.push(point);
+                    if (node.children) {
+                        const childIndex = (point.x > node.x + node.width/2 ? 1 : 0) +
+                                        (point.y > node.y + node.height/2 ? 2 : 0);
+                        node = node.children[childIndex];
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Subdivide nodes with too many points
+            while (queue.length > 0) {
+                const node = queue.shift();
+                if (node.points.length > maxPoints && node.width > 0.1) { // Minimum size limit
+                    node.subdivide();
+                    for (const point of node.points) {
+                        const childIndex = (point.x > node.x + node.width/2 ? 1 : 0) +
+                                        (point.y > node.y + node.height/2 ? 2 : 0);
+                        node.children[childIndex].points.push(point);
+                    }
+                    node.points = [];
+                    queue.push(...node.children);
+                }
+                allSquares.push({
+                    x: [node.x, node.x + node.width, node.x + node.width, node.x, node.x],
+                    y: [node.y, node.y, node.y + node.height, node.y + node.height, node.y]
+                });
+            }
+
+            return {root, squares: allSquares};
+        }
+
+        // Generate data and build quadtree
+        const points = generateRingData();
+        const xValues = points.map(p => p.x);
+        const yValues = points.map(p => p.y);
+        const minX = Math.min(...xValues), maxX = Math.max(...xValues);
+        const minY = Math.min(...yValues), maxY = Math.max(...yValues);
+        const quadtree = buildQuadtree(points, minX, maxX, minY, maxY);
+
+        // Create scatter plot for points
+        const scatterTrace = {
+            x: xValues,
+            y: yValues,
+            mode: 'markers',
+            type: 'scatter',
+            marker: {
+                size: 2,
+                color: '#1f77b4',
+                opacity: 0.5
+            }
+        };
+
+        // Create traces for square boundaries
+        const squareTraces = quadtree.squares.map(square => ({
+            x: square.x,
+            y: square.y,
+            mode: 'lines',
+            type: 'scatter',
+            line: {
+                color: 'rgba(255, 0, 0, 0.3)',
+                width: 1
+            },
+            fill: 'none'
+        }));
+
+        // Combine all traces
+        const data = [scatterTrace, ...squareTraces];
+
+        // Layout configuration
+        const layout = {
+            title: 'Concentric Rings with Quadtree Bucketing',
+            xaxis: {title: 'X', zeroline: false},
+            yaxis: {title: 'Y', zeroline: false, scaleanchor: "x", scaleratio: 1},
+            showlegend: false,
+            margin: {l: 50, r: 50, t: 50, b: 50},
+            paper_bgcolor: '#ffffff',
+            plot_bgcolor: '#ffffff'
+        };
+
+        // Create the plot
+        Plotly.newPlot('chart', data, layout, {responsive: true});
+    </script>
+</body>
+</html>

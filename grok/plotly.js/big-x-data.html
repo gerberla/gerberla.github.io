@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Plotly Zoom Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #chart {
+            width: 100%;
+            height: 80vh;
+        }
+    </style>
+</head>
+<body>
+    <h2>Dynamic Zoom Demo with Uniform Data</h2>
+    <div id="chart"></div>
+
+    <script>
+        // Mock backend to generate uniform-like data
+        function mockBackend(x_min, x_max, N = 1000) {
+            const delta = (x_max - x_min) / N;
+            const data = [];
+            for (let i = 0; i < N; i++) {
+                const x = x_min + i * delta;
+                // Linear trend with slight noise for a uniform-like series
+                const y = 2 * x + 0.1 * Math.random();
+                data.push({ x: x, y: y });
+            }
+            return data;
+        }
+
+        // Initial range and data
+        const initialRange = [0, 1];
+        const initialData = mockBackend(initialRange[0], initialRange[1]);
+
+        // Initialize the Plotly chart
+        Plotly.newPlot('chart', [{
+            x: initialData.map(d => d.x),
+            y: initialData.map(d => d.y),
+            type: 'scatter',
+            mode: 'lines',
+            line: { color: '#1f77b4' }
+        }], {
+            title: 'Zoomable Uniform Data Series',
+            xaxis: { range: initialRange, title: 'X Axis' },
+            yaxis: { range: [0, 2.5], title: 'Y Axis' },
+            margin: { t: 50, r: 50, b: 50, l: 50 }
+        });
+
+        // Reference to the chart div
+        const chart = document.getElementById('chart');
+
+        // Handle zoom and pan events
+        chart.on('plotly_relayout', function(eventdata) {
+            if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
+                const x_min = eventdata['xaxis.range[0]'];
+                const x_max = eventdata['xaxis.range[1]'];
+                // Fetch new data for the updated range
+                const newData = mockBackend(x_min, x_max);
+                // Update the chart
+                Plotly.restyle(chart, {
+                    x: [newData.map(d => d.x)],
+                    y: [newData.map(d => d.y)]
+                });
+            }
+        });
+    </script>
+</body>
+</html>
