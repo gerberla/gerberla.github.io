@@ -133,13 +133,16 @@
         errorSpan.style.display = 'none';
         errorSpan.textContent = '';
         
-        // Fetch GLB file from IPFS gateway
         const response = await fetch(filePath, { mode: 'cors' });
         if (!response.ok) {
             throw new Error(`Failed to load ${filePath}: ${response.statusText}`);
         }
 
-        audioElement.src =  await audioContext.decodeAudioData(await response.arrayBuffer());
+        //audioElement.src =  await audioContext.decodeAudioData(await response.arrayBuffer());
+
+        const blob = await response.blob();
+        audioElement.src = URL.createObjectURL(blob);
+
         playButton.disabled = false;
         pauseButton.disabled = true;
         seekBar.disabled = false;
