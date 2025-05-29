@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time FFT Heatmap from Audio</title>
+  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+  <style>
+    .controls { margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+    button { padding: 5px 10px; margin-right: 10px; }
+    #seekBar { width: 600px; margin: 10px 0; }
+    .slider-container { margin: 5px 0; }
+    select {
+            padding: 8px;
+            font-size: 1em;
+            background-color: #2c3436;
+            color: #ffffff;
+            border: 1px solid #444;
+            border-radius: 4px;
+            cursor: pointer;
+            max-width: 200px;
+    }
+    select:focus {
+        outline: none;
+        border-color: #66b3ff;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph"></div>
+  <input type="file" id="audioInput" accept="audio/*" />
+  <div class="controls">
+    <select id="fileSelect">
+        <option value="" disabled selected>Select a Sound</option>
+        <option value="/assets/data/encoded-sound.mp3">Encoded Sound</option>
+        <option value="/assets/data/Marrow%20Of%20The%20Earth.mp3">Marrow Of The Earth</option>
+    </select>
+    <span id="error"></span>
+  </div>
+  <div class="controls">
+    <button id="playButton" disabled>Play</button>
+    <button id="pauseButton" disabled>Pause</button>
+  </div>
+  <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1" disabled />
+  <div class="slider-container">
+    <label>Thresh:</label><input type="range" min="0" max="10" value="0" step="0.1" id="threshSlider"/>
+    <label id="thresh">0</label>
+  </div>
+  <div class="slider-container">
+    <label>Playback Speed:</label><input type="range" min="0.5" max="2" value="1" step="0.1" id="speedSlider"/>
+    <label id="speed">1x</label>
+  </div>
+  <div class="slider-container">
+    <label>FFT Intensity:</label><input type="range" min="1" max="50" value="10" step="1" id="intensitySlider"/>
+    <label id="intensity">10</label>
+  </div>
+  <div class="slider-container">
+    <label>Aspect Ratio (Time/Freq):</label><input type="range" min="1" max="10" value="4" step="0.1" id="aspectSlider"/>
+    <label id="aspect">4</label>
+  </div>
+  <p id="debug">AudioContext State: Unknown | Frequency Data: N/A</p>
+
+  <script>
+  // Plot Setup
+  var windowSize = 500; // Fixed time axis, scaled by aspect ratio
+  var binWidth = 512;    // Fixed frequency axis (power of 2 for FFT)
+  var thresh = 0;
+
+  var dataMatrix = [];
+  function initializeDataMatrix() {
+    dataMatrix = [];
+    for (var i = 0; i < windowSize; i++) {
+      dataMatrix.push(Array(binWidth).fill(0));
+    }
+  }
+  initializeDataMatrix();
+
+  var dataPlot = [{
+    z: dataMatrix,
+    showscale: true,
+    colorscale: 'Hot',
+    type: 'heatmap',
+    zsmooth: 'best'
+  }];
+
+  var layout = {
+    autosize: true,
+    width: 900,
+    height: 600,
+    margin: { l: 50, r: 50, b: 50, t: 25, pad: 4 },
+    paper_bgcolor: '#7f7f7f',
+    plot_bgcolor: '#c7c7c7'
+  };
+
+  Plotly.newPlot('graph', dataPlot, layout);
+
+  // Web Audio Setup
+  var audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  var audioElement = new Audio();
+  var sourceNode = null;
+  var analyser = audioContext.createAnalyser();
+  analyser.fftSize = binWidth * 2; // 512, gives 256 bins
+  var frequencyData = new Uint8Array(analyser.frequencyBinCount);
+  var isPlaying = false;
+
+  // UI Elements
+  var playButton = document.getElementById('playButton');
+  var pauseButton = document.getElementById('pauseButton');
+  var seekBar = document.getElementById('seekBar');
+
+  // Audio input handling
+  document.getElementById('audioInput').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (file) {
+      audioElement.src = URL.createObjectURL(file);
+      playButton.disabled = false;
+      pauseButton.disabled = true;
+      seekBar.disabled = false;
+      audioElement.addEventListener('loadedmetadata', updateSeekBarMax);
+    }
+  });
+
+  // Secondary Selection:
+
+  // Dropdown handling
+  const fileSelect = document.getElementById('fileSelect');
+  const errorSpan = document.getElementById('error');
+
+  fileSelect.addEventListener('change', async () => {
+    const filePath = fileSelect.value;
+    if (!filePath) return;
+
+    try {
+        errorSpan.style.display = 'none';
+        errorSpan.textContent = '';
+        
+        const response = await fetch(filePath, { mode: 'cors' });
+        if (!response.ok) {
+            throw new Error(`Failed to load ${filePath}: ${response.statusText}`);
+        }
+
+        //audioElement.src =  await audioContext.decodeAudioData(await response.arrayBuffer());
+
+        const blob = await response.blob();
+        audioElement.src = URL.createObjectURL(blob);
+
+        playButton.disabled = false;
+        pauseButton.disabled = true;
+        seekBar.disabled = false;
+        audioElement.addEventListener('loadedmetadata', updateSeekBarMax);
+
+    } catch (error) {
+        errorSpan.textContent = error.message;
+        errorSpan.style.display = 'block';
+        console.error(error);
+    }
+  });
+
+  // Play button
+  playButton.addEventListener('click', function() {
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        console.log('AudioContext resumed');
+        startPlayback();
+      });
+    } else {
+      startPlayback();
+    }
+  });
+
+  // Pause button
+  pauseButton.addEventListener('click', function() {
+    audioElement.pause();
+    isPlaying = false;
+    playButton.disabled = false;
+    pauseButton.disabled = true;
+    updateGraphWithThreshold();
+  });
+
+  // Seek bar
+  seekBar.addEventListener('input', function() {
+    var seekTime = (this.value / 100) * audioElement.duration;
+    audioElement.currentTime = seekTime;
+  });
+
+  audioElement.addEventListener('timeupdate', function() {
+    if (!isNaN(audioElement.duration)) {
+      seekBar.value = (audioElement.currentTime / audioElement.duration) * 100;
+    }
+  });
+
+  function updateSeekBarMax() {
+    seekBar.max = 100;
+    seekBar.value = 0;
+  }
+
+  function startPlayback() {
+    if (!sourceNode) {
+      sourceNode = audioContext.createMediaElementSource(audioElement);
+      sourceNode.connect(analyser);
+      analyser.connect(audioContext.destination);
+    }
+    audioElement.play();
+    isPlaying = true;
+    playButton.disabled = true;
+    pauseButton.disabled = false;
+    requestAnimationFrame(updateGraph);
+  }
+
+  // Animation and FFT
+  var lastUpdate = performance.now();
+  var updateInterval = 1000 / 60; // ~60fps
+  var intensity = 10;
+
+  function updateGraph(currentTime) {
+    var deltaTime = (currentTime - lastUpdate) / 1000;
+    if (deltaTime >= updateInterval / 1000 && isPlaying) {
+      lastUpdate = currentTime;
+
+      analyser.getByteFrequencyData(frequencyData);
+
+      var maxFreq = Math.max(...frequencyData);
+      document.getElementById('debug').innerHTML = 
+        `AudioContext State: ${audioContext.state} | Max Frequency Value: ${maxFreq}`;
+
+      var singleFftArray = new Array(binWidth).fill(0);
+      for (var i = 0; i < binWidth; i++) {
+        singleFftArray[i] = frequencyData[i] / 255 * intensity;
+      }
+
+      dataMatrix.shift();
+      dataMatrix.push(singleFftArray);
+
+      var filteredData = filter(dataMatrix);
+      var dataUpdate = { z: [transpose(filteredData)] };
+      Plotly.update('graph', dataUpdate);
+    }
+    if (isPlaying) {
+      requestAnimationFrame(updateGraph);
+    }
+  }
+
+  function updateGraphWithThreshold() {
+    var filteredData = filter(dataMatrix);
+    var dataUpdate = { z: [transpose(filteredData)] };
+    Plotly.update('graph', dataUpdate);
+  }
+
+  // Filter and transpose functions
+  function filter(m) {
+    var matrix = m.map(row => row.slice());
+    for (var i = 0; i < matrix.length; i++) {
+      for (var j = 0; j < binWidth; j++) {
+        matrix[i][j] = matrix[i][j] < thresh ? 0 : matrix[i][j];
+      }
+    }
+    return matrix;
+  }
+
+  function transpose(a) {
+    return Object.keys(a[0]).map(function(c) {
+      return a.map(function(r) { return r[c]; });
+    });
+  }
+
+  // Slider initialization
+  function sliderInput(el, min, max, steps, value, labelFormat) {
+    var slider = document.getElementById(el);
+    slider.setAttribute("min", min);
+    slider.setAttribute("max", max);
+    slider.setAttribute("step", (max - min) / steps);
+    slider.setAttribute("value", value);
+    slider.addEventListener("input", function() {
+      var val = parseFloat(this.value);
+      if (el === "speedSlider") {
+        audioElement.playbackRate = val;
+        document.getElementById("speed").innerHTML = val.toFixed(1) + 'x';
+      } else if (el === "threshSlider") {
+        thresh = val;
+        document.getElementById("thresh").innerHTML = val;
+        updateGraphWithThreshold();
+      } else if (el === "intensitySlider") {
+        intensity = val;
+        document.getElementById("intensity").innerHTML = val;
+      } else if (el === "aspectSlider") {
+        windowSize = Math.floor(binWidth * val); // Fixed binWidth, scale windowSize
+        initializeDataMatrix();
+        Plotly.react('graph', [{ z: dataMatrix, type: 'heatmap', colorscale: 'Hot', zsmooth: 'fast' }], layout);
+        document.getElementById("aspect").innerHTML = val.toFixed(1);
+      }
+    });
+    document.getElementById(slider.id.replace("Slider", "")).innerHTML = labelFormat ? labelFormat(value) : value;
+    return slider;
+  }
+
+  sliderInput("threshSlider", 0, 10, 100, 0);
+  sliderInput("speedSlider", 0.5, 2, 15, 1, v => v.toFixed(1) + 'x');
+  sliderInput("intensitySlider", 1, 50, 49, 10);
+  sliderInput("aspectSlider", 1, 10, 90, 4, v => v.toFixed(1));
+  </script>
+</body>
+</html>
